@@ -14,6 +14,10 @@ type JfItem = {
 	ImageTags?: Record<string, string>;
 };
 
+function normalizePath(path: string): string {
+	return path.replaceAll('\\', '/').replace(/\/+$/, '');
+}
+
 function config() {
 	const url = env.JELLYFIN_URL;
 	const userId = env.JELLYFIN_USER_ID;
@@ -53,16 +57,27 @@ async function jf<T>(
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
-/** Directory name that contains the file at `path`, used as a fallback "folder" when Jellyfin has no folder items. */
-function parentDirName(path: string): string | undefined {
-	const normalized = path.replaceAll('\\', '/').replace(/\/+$/, '');
-	const parts = normalized.split('/');
-	return parts.at(-2);
+/**
+ * Primer segmento de `itemPath` justo debajo de `rootPath` — la "carpeta madre" de un item,
+ * sin importar cuántos niveles haya entre medias (temporadas, subcarpetas, etc.).
+ * P.ej. root "/media/cartoons" + item "/media/cartoons/looney toones/1/bugs.mp4" → "looney toones".
+ */
+function folderUnderRoot(itemPath: string, rootPath: string): string | undefined {
+	const item = normalizePath(itemPath);
+	const root = normalizePath(rootPath);
+	if (!item.startsWith(root + '/')) return undefined;
+	return item.slice(root.length + 1).split('/')[0];
+}
+
+async function getItemPath(itemId: string): Promise<string | undefined> {
+	const { userId } = config();
+	const item = await jf<JfItem>(`/Users/${userId}/Items/${itemId}`, { Fields: 'Path' });
+	return item.Path;
 }
 
 export async function listFolders(): Promise<FolderOption[]> {
 	const { userId } = config();
-	const views = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`);
+	const views = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`, { Fields: 'Path' });
 
 	const folders: FolderOption[] = [];
 	for (const view of views.Items) {
@@ -78,15 +93,17 @@ export async function listFolders(): Promise<FolderOption[]> {
 			continue;
 		}
 
-		// Este library es "plano" (p.ej. una biblioteca de Películas sin subcarpetas
-		// visibles en Jellyfin): derivamos las carpetas a partir del Path de cada item.
+		// Esta biblioteca es "plana" (Jellyfin devuelve los ficheros directamente, sin
+		// exponer las carpetas físicas): derivamos la carpeta madre a partir del Path
+		// de cada item, recortado justo debajo de la raíz de la biblioteca.
+		if (!view.Path) continue;
 		const seen = new Set<string>();
 		for (const item of children.Items) {
 			if (!item.Path) continue;
-			const name = parentDirName(item.Path);
+			const name = folderUnderRoot(item.Path, view.Path);
 			if (!name || seen.has(name)) continue;
 			seen.add(name);
-			folders.push({ id: `path:${view.Id}:${name}`, name });
+			folders.push({ id: `path:${view.Id}:${encodeURIComponent(name)}`, name });
 		}
 	}
 
@@ -107,6 +124,9 @@ async function unwatchedItemsForRealFolder(folderId: string): Promise<JfItem[]> 
 
 async function unwatchedItemsForPathFolder(viewId: string, folderName: string): Promise<JfItem[]> {
 	const { userId } = config();
+	const rootPath = await getItemPath(viewId);
+	if (!rootPath) return [];
+
 	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
 		ParentId: viewId,
 		Recursive: 'true',
@@ -114,13 +134,13 @@ async function unwatchedItemsForPathFolder(viewId: string, folderName: string): 
 		Filters: 'IsUnplayed',
 		Fields: 'Path,SeriesName,ImageTags'
 	});
-	return Items.filter((item) => item.Path && parentDirName(item.Path) === folderName);
+	return Items.filter((item) => item.Path && folderUnderRoot(item.Path, rootPath) === folderName);
 }
 
 async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
 	if (folderId.startsWith('path:')) {
-		const [, viewId, ...rest] = folderId.split(':');
-		return unwatchedItemsForPathFolder(viewId, rest.join(':'));
+		const [, viewId, encodedName] = folderId.split(':');
+		return unwatchedItemsForPathFolder(viewId, decodeURIComponent(encodedName));
 	}
 	return unwatchedItemsForRealFolder(folderId);
 }
