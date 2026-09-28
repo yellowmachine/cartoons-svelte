@@ -1,12 +1,34 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { ClientSession, FolderOption, PlaylistItem } from '$lib/types';
+
+	const SELECTED_FOLDERS_KEY = 'cartoons:selectedFolders';
+
+	function loadStoredSelection(): string[] {
+		if (!browser) return [];
+		try {
+			const raw = localStorage.getItem(SELECTED_FOLDERS_KEY);
+			return raw ? JSON.parse(raw) : [];
+		} catch {
+			return [];
+		}
+	}
 
 	let { data } = $props();
 
 	const folders: FolderOption[] = $derived(data.folders);
 
-	let selected = new SvelteSet<string>();
+	let selected = new SvelteSet<string>(loadStoredSelection());
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.setItem(SELECTED_FOLDERS_KEY, JSON.stringify([...selected]));
+		} catch {
+			// localStorage puede no estar disponible (modo privado, cuota llena…); no es crítico.
+		}
+	});
 	let generating = $state(false);
 	let generateError = $state<string | null>(null);
 
