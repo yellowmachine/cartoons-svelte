@@ -58,7 +58,10 @@ bun run dev -- --open
 - `bun run check` — chequeo de tipos
 - `bun run lint` / `bun run format` — lint y formateo (ESLint + Prettier)
 
-## Docker
+## Docker (local)
+
+`compose.yaml` es solo para probar la imagen en tu máquina — **no** es lo que usa Dokploy en
+producción (ver más abajo):
 
 ```sh
 docker compose up --build
@@ -78,6 +81,9 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
 - `DOKPLOY_WEBHOOK_URL`: URL del webhook de deploy de la aplicación en Dokploy (se genera en la
   configuración de deploy → "Custom Git" o el webhook de tu app).
 
-En Dokploy, la aplicación debe apuntar a la imagen `ghcr.io/<owner>/<repo>:latest` con
-`pull_policy: always`, y tener configuradas las variables de entorno `JELLYFIN_URL`,
-`JELLYFIN_USER_ID`, `JELLYFIN_API_KEY` y `ORIGIN`.
+En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
+`ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las
+variables de entorno `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_API_KEY` y `ORIGIN` (esta
+última con el dominio público que le asignes). No hace falta publicar/exponer el puerto al host:
+Traefik llega al contenedor por la red interna que gestiona Dokploy — `compose.yaml` no
+interviene en este flujo, es solo para desarrollo local.
