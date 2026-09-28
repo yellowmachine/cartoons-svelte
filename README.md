@@ -40,6 +40,9 @@ cp .env.example .env
   Panel de administración → Usuarios → (tu usuario), está en la URL.
 - `JELLYFIN_API_KEY`: se genera en Panel de administración → API Keys → "+".
 - `ORIGIN`: URL pública donde sirves la app (SvelteKit la necesita en producción).
+- `ADMIN_PASSWORD`: si la defines, la app pide esta contraseña antes de dejar entrar (una cookie
+  de 10 años recuerda la sesión). Recomendado si el dominio es accesible desde internet, como
+  `cartoons.scholio.review`. Vacío o sin definir = sin contraseña.
 
 Estas variables se leen en **runtime**, no en build time — puedes cambiarlas sin reconstruir la
 imagen, solo reiniciando el contenedor.
