@@ -69,15 +69,26 @@ function folderUnderRoot(itemPath: string, rootPath: string): string | undefined
 	return item.slice(root.length + 1).split('/')[0];
 }
 
-async function getItemPath(itemId: string): Promise<string | undefined> {
-	const { userId } = config();
-	const item = await jf<JfItem>(`/Users/${userId}/Items/${itemId}`, { Fields: 'Path' });
-	return item.Path;
+type VirtualFolder = { ItemId: string; Locations: string[] };
+
+/**
+ * Rutas físicas reales configuradas para cada biblioteca (Name/ItemId/Locations).
+ * A diferencia del campo `Path` de /Users/{id}/Views, esto siempre son las carpetas
+ * tal y como las añadiste en Jellyfin, aunque una biblioteca tenga varias.
+ */
+async function getLibraryRoots(): Promise<Map<string, string[]>> {
+	const virtualFolders = await jf<VirtualFolder[]>('/Library/VirtualFolders');
+	const map = new Map<string, string[]>();
+	for (const vf of virtualFolders) map.set(vf.ItemId, vf.Locations ?? []);
+	return map;
 }
 
 export async function listFolders(): Promise<FolderOption[]> {
 	const { userId } = config();
-	const views = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`, { Fields: 'Path' });
+	const [views, libraryRoots] = await Promise.all([
+		jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`),
+		getLibraryRoots()
+	]);
 
 	const folders: FolderOption[] = [];
 	for (const view of views.Items) {
@@ -95,15 +106,19 @@ export async function listFolders(): Promise<FolderOption[]> {
 
 		// Esta biblioteca es "plana" (Jellyfin devuelve los ficheros directamente, sin
 		// exponer las carpetas físicas): derivamos la carpeta madre a partir del Path
-		// de cada item, recortado justo debajo de la raíz de la biblioteca.
-		if (!view.Path) continue;
+		// de cada item, recortado justo debajo de la raíz real de la biblioteca.
+		const roots = libraryRoots.get(view.Id) ?? [];
+		if (roots.length === 0) continue;
+
 		const seen = new Set<string>();
 		for (const item of children.Items) {
 			if (!item.Path) continue;
-			const name = folderUnderRoot(item.Path, view.Path);
-			if (!name || seen.has(name)) continue;
+			const root = roots.find((r) => folderUnderRoot(item.Path!, r) !== undefined);
+			const name = root ? folderUnderRoot(item.Path, root) : undefined;
+			if (!root || !name || seen.has(name)) continue;
 			seen.add(name);
-			folders.push({ id: `path:${view.Id}:${encodeURIComponent(name)}`, name });
+			const id = `path:${view.Id}:${encodeURIComponent(root)}:${encodeURIComponent(name)}`;
+			folders.push({ id, name });
 		}
 	}
 
@@ -122,11 +137,12 @@ async function unwatchedItemsForRealFolder(folderId: string): Promise<JfItem[]> 
 	return Items;
 }
 
-async function unwatchedItemsForPathFolder(viewId: string, folderName: string): Promise<JfItem[]> {
+async function unwatchedItemsForPathFolder(
+	viewId: string,
+	root: string,
+	folderName: string
+): Promise<JfItem[]> {
 	const { userId } = config();
-	const rootPath = await getItemPath(viewId);
-	if (!rootPath) return [];
-
 	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
 		ParentId: viewId,
 		Recursive: 'true',
@@ -134,13 +150,17 @@ async function unwatchedItemsForPathFolder(viewId: string, folderName: string): 
 		Filters: 'IsUnplayed',
 		Fields: 'Path,SeriesName,ImageTags'
 	});
-	return Items.filter((item) => item.Path && folderUnderRoot(item.Path, rootPath) === folderName);
+	return Items.filter((item) => item.Path && folderUnderRoot(item.Path, root) === folderName);
 }
 
 async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
 	if (folderId.startsWith('path:')) {
-		const [, viewId, encodedName] = folderId.split(':');
-		return unwatchedItemsForPathFolder(viewId, decodeURIComponent(encodedName));
+		const [, viewId, encodedRoot, encodedName] = folderId.split(':');
+		return unwatchedItemsForPathFolder(
+			viewId,
+			decodeURIComponent(encodedRoot),
+			decodeURIComponent(encodedName)
+		);
 	}
 	return unwatchedItemsForRealFolder(folderId);
 }
