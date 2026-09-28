@@ -1,12 +1,15 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import '../app.css';
-	import favicon from '$lib/assets/favicon.svg';
 
 	let { children } = $props();
-</script>
 
-<svelte:head>
-	<link rel="icon" href={favicon} />
-</svelte:head>
+	// vite-plugin-pwa no inyecta el registro automáticamente en el app.html de
+	// SvelteKit (eso solo funciona en un index.html de Vite puro), así que se
+	// registra el Service Worker generado (build/client/sw.js) a mano.
+	if (browser && 'serviceWorker' in navigator) {
+		navigator.serviceWorker.register('/sw.js');
+	}
+</script>
 
 {@render children()}

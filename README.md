@@ -11,12 +11,21 @@ SvelteKit + Bun + Tailwind CSS.
 1. Al entrar se listan las bibliotecas (Views) de tu Jellyfin como carpetas: la app asume que
    cada biblioteca es ya una serie/colección propia (p.ej. una biblioteca por dibujo animado),
    no una biblioteca grande con varias series dentro.
-2. Marcas las que te interesan y pulsas **"10 al azar y crear Para ver hoy"**.
-3. El servidor busca items sin ver en esas carpetas, elige 10 al azar, borra la playlist
-   "Para ver hoy" si ya existía y crea una nueva con esos 10 items.
+2. Marcas las que te interesan y pulsas **"🎲 10 al azar"**. El servidor busca items sin ver en
+   esas carpetas (como mucho 2 por carpeta, para que una con muchísimo contenido no se coma el
+   resultado) y propone 10 al azar, cada uno marcado por defecto.
+3. Puedes desmarcar los que no te apetezcan hoy y pulsar **"✅ Crear Para ver hoy"**: ahí es
+   cuando de verdad se borra la playlist "Para ver hoy" si ya existía y se crea una nueva con
+   los items que sigan marcados.
 4. Se muestran los clientes Jellyfin conectados en ese momento, uno por botón
    ("Play en salón", "Play en tele habitación"…). Al pulsar uno, se manda la orden de reproducir
    esos items ahí mismo.
+
+## Instalar como app (PWA)
+
+La app tiene manifest e icono, así que Brave (y Chrome) ofrecen instalarla como aplicación:
+abre la URL, y en la barra de direcciones pulsa el icono de instalar (o menú → "Instalar
+Cartoons…"). Si cambias `static/icon.svg`, regenera los iconos con `bun run pwa:icons`.
 
 ## Configuración
 
