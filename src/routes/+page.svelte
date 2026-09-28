@@ -147,7 +147,18 @@
 	class="from-toon-sky via-toon-sky to-toon-grass min-h-screen bg-gradient-to-b px-4 py-10 sm:px-8"
 >
 	<div class="mx-auto max-w-3xl">
-		<header class="mb-8 text-center">
+		<header class="relative mb-8 text-center">
+			{#if data.authEnabled}
+				<form method="POST" action="/logout" class="absolute top-0 right-0">
+					<button
+						type="submit"
+						class="rounded-full bg-white/20 px-4 py-2 text-sm font-semibold text-white backdrop-blur
+							transition hover:bg-white/30"
+					>
+						🚪 Salir
+					</button>
+				</form>
+			{/if}
 			<h1
 				class="text-5xl font-bold text-white drop-shadow-[0_3px_0_rgba(43,33,64,0.35)] sm:text-6xl"
 			>
