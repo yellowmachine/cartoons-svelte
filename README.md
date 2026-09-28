@@ -8,9 +8,9 @@ SvelteKit + Bun + Tailwind CSS.
 
 ## Cómo funciona
 
-1. Al entrar se listan las carpetas/carpetas-serie disponibles en tu Jellyfin (usando las
-   subcarpetas reales de cada biblioteca, o el nombre de la carpeta contenedora del archivo si
-   la biblioteca no expone carpetas).
+1. Al entrar se listan las bibliotecas (Views) de tu Jellyfin como carpetas: la app asume que
+   cada biblioteca es ya una serie/colección propia (p.ej. una biblioteca por dibujo animado),
+   no una biblioteca grande con varias series dentro.
 2. Marcas las que te interesan y pulsas **"10 al azar y crear Para ver hoy"**.
 3. El servidor busca items sin ver en esas carpetas, elige 10 al azar, borra la playlist
    "Para ver hoy" si ya existía y crea una nueva con esos 10 items.
