@@ -7,16 +7,9 @@ const ITEM_TYPES = 'Movie,Episode,Video';
 type JfItem = {
 	Id: string;
 	Name: string;
-	Type?: string;
-	IsFolder?: boolean;
-	Path?: string;
 	SeriesName?: string;
 	ImageTags?: Record<string, string>;
 };
-
-function normalizePath(path: string): string {
-	return path.replaceAll('\\', '/').replace(/\/+$/, '');
-}
 
 function config() {
 	const url = env.JELLYFIN_URL;
@@ -58,90 +51,22 @@ async function jf<T>(
 }
 
 /**
- * Primer segmento de `itemPath` justo debajo de `rootPath` — la "carpeta madre" de un item,
- * sin importar cuántos niveles haya entre medias (temporadas, subcarpetas, etc.).
- * P.ej. root "/media/cartoons" + item "/media/cartoons/looney toones/1/bugs.mp4" → "looney toones".
+ * En este Jellyfin cada biblioteca (View) es directamente una serie/colección
+ * (una carpeta madre), no una biblioteca grande con varias series dentro. Así
+ * que la carpeta a elegir es la propia View, sin bajar a mirar su contenido.
  */
-function folderUnderRoot(itemPath: string, rootPath: string): string | undefined {
-	const item = normalizePath(itemPath);
-	const root = normalizePath(rootPath);
-	if (!item.startsWith(root + '/')) return undefined;
-	return item.slice(root.length + 1).split('/')[0];
-}
-
-type VirtualFolder = { ItemId: string; Locations: string[] };
-
-/**
- * Rutas físicas reales configuradas para cada biblioteca (Name/ItemId/Locations).
- * A diferencia del campo `Path` de /Users/{id}/Views, esto siempre son las carpetas
- * tal y como las añadiste en Jellyfin, aunque una biblioteca tenga varias.
- */
-async function getLibraryRoots(): Promise<Map<string, string[]>> {
-	const virtualFolders = await jf<VirtualFolder[]>('/Library/VirtualFolders');
-	const map = new Map<string, string[]>();
-	for (const vf of virtualFolders) map.set(vf.ItemId, vf.Locations ?? []);
-	return map;
-}
-
 export async function listFolders(): Promise<FolderOption[]> {
 	const { userId } = config();
-	const [views, libraryRoots] = await Promise.all([
-		jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`),
-		getLibraryRoots()
-	]);
+	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`);
 
-	// Recogemos primero todas las carpetas "en bruto": puede haber nombres repetidos
-	// si dos bibliotecas (o dos ubicaciones dentro de una) apuntan a contenido con el
-	// mismo nombre visible (p.ej. la misma serie añadida dos veces).
-	const raw: FolderOption[] = [];
-	for (const view of views.Items) {
-		const roots = libraryRoots.get(view.Id) ?? [];
-
-		if (roots.length > 0) {
-			// Miramos TODOS los items de la biblioteca a cualquier profundidad (no solo
-			// el primer nivel): algunas series meten cada episodio en su propia
-			// subcarpeta, así que solo el Path completo hasta la raíz física nos dice
-			// de forma fiable cuál es la carpeta madre real, sin importar cuántos
-			// niveles haya entre medias.
-			const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-				ParentId: view.Id,
-				Recursive: 'true',
-				IncludeItemTypes: ITEM_TYPES,
-				Fields: 'Path'
-			});
-
-			const seen = new Set<string>();
-			for (const item of Items) {
-				if (!item.Path) continue;
-				const root = roots.find((r) => folderUnderRoot(item.Path!, r) !== undefined);
-				const name = root ? folderUnderRoot(item.Path, root) : undefined;
-				if (!root || !name || seen.has(name)) continue;
-				seen.add(name);
-				const id = `path:${view.Id}:${encodeURIComponent(root)}:${encodeURIComponent(name)}`;
-				raw.push({ id, name });
-			}
-			continue;
-		}
-
-		// Sin raíz física conocida para esta biblioteca (p.ej. una fuente remota):
-		// como último recurso, usamos las carpetas que el propio Jellyfin exponga.
-		const children = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-			ParentId: view.Id,
-			Recursive: 'false',
-			Fields: 'Path'
-		});
-		for (const folder of children.Items.filter((c) => c.IsFolder)) {
-			raw.push({ id: folder.Id, name: folder.Name });
-		}
-	}
-
-	// Un único checkbox por nombre: si el mismo nombre viene de varias fuentes,
-	// se fusionan en un id "multi:" que al seleccionarlo consulta todas ellas.
+	// Un único checkbox por nombre: si dos bibliotecas comparten nombre (p.ej.
+	// añadida por error dos veces), se fusionan en un id "multi:" que al
+	// seleccionarlo consulta items sin ver en todas ellas.
 	const byName = new Map<string, string[]>();
-	for (const folder of raw) {
-		const ids = byName.get(folder.name) ?? [];
-		ids.push(folder.id);
-		byName.set(folder.name, ids);
+	for (const view of Items) {
+		const ids = byName.get(view.Name) ?? [];
+		ids.push(view.Id);
+		byName.set(view.Name, ids);
 	}
 
 	return [...byName.entries()].map(([name, ids]) => ({
@@ -150,49 +75,22 @@ export async function listFolders(): Promise<FolderOption[]> {
 	}));
 }
 
-async function unwatchedItemsForRealFolder(folderId: string): Promise<JfItem[]> {
-	const { userId } = config();
-	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-		ParentId: folderId,
-		Recursive: 'true',
-		IncludeItemTypes: ITEM_TYPES,
-		Filters: 'IsUnplayed',
-		Fields: 'Path,SeriesName,ImageTags'
-	});
-	return Items;
-}
-
-async function unwatchedItemsForPathFolder(
-	viewId: string,
-	root: string,
-	folderName: string
-): Promise<JfItem[]> {
-	const { userId } = config();
-	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-		ParentId: viewId,
-		Recursive: 'true',
-		IncludeItemTypes: ITEM_TYPES,
-		Filters: 'IsUnplayed',
-		Fields: 'Path,SeriesName,ImageTags'
-	});
-	return Items.filter((item) => item.Path && folderUnderRoot(item.Path, root) === folderName);
-}
-
 async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
 	if (folderId.startsWith('multi:')) {
 		const ids: string[] = JSON.parse(decodeURIComponent(folderId.slice('multi:'.length)));
 		const pools = await Promise.all(ids.map(unwatchedItemsForFolder));
 		return pools.flat();
 	}
-	if (folderId.startsWith('path:')) {
-		const [, viewId, encodedRoot, encodedName] = folderId.split(':');
-		return unwatchedItemsForPathFolder(
-			viewId,
-			decodeURIComponent(encodedRoot),
-			decodeURIComponent(encodedName)
-		);
-	}
-	return unwatchedItemsForRealFolder(folderId);
+
+	const { userId } = config();
+	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
+		ParentId: folderId,
+		Recursive: 'true',
+		IncludeItemTypes: ITEM_TYPES,
+		Filters: 'IsUnplayed',
+		Fields: 'SeriesName,ImageTags'
+	});
+	return Items;
 }
 
 function shuffle<T>(items: T[]): T[] {
