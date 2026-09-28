@@ -1,0 +1,111 @@
+name: Build, Push and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - name: Set up QEMU (para builds arm64 en runners amd64)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-dokploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Dokploy's `pull_policy: always` solo sirve si `:latest` en GHCR ya
+      # apunta a la imagen que acabamos de publicar. Disparar el webhook de
+      # inmediato puede llegar antes de que GHCR propague el tag y desplegar
+      # la imagen anterior — esperamos aquí a que `:latest` resuelva a
+      # nuestro digest antes de lanzar el deploy.
+      - name: Wait for GHCR latest tag to reflect pushed digest
+        run: |
+          image="${{ env.REGISTRY }}/${{ github.repository }}"
+          target="${{ needs.build.outputs.digest }}"
+          echo "Waiting for $image:latest to resolve to $target"
+          for i in $(seq 1 30); do
+            current=$(docker buildx imagetools inspect "$image:latest" 2>/dev/null \
+              | awk '/^Digest:/ { print $2; exit }')
+            if [ "$current" = "$target" ]; then
+              echo "Matched after $i attempt(s): $current"
+              exit 0
+            fi
+            echo "Attempt $i/30: latest is '$current', want '$target' — retrying in 5s"
+            sleep 5
+          done
+          echo "::error::Timed out waiting for $image:latest to reflect $target"
+          exit 1
+
+      # El endpoint del webhook de Dokploy es el mismo que usa su integración
+      # nativa de GitHub en cada push — solo lo reconoce como un deploy real
+      # (y no un "Branch Not Match") si lleva la cabecera de evento de GitHub
+      # y un ref en el body.
+      - name: Trigger Dokploy deploy
+        run: |
+          status=$(curl -sS -o /tmp/dokploy-response.txt -w '%{http_code}' \
+            -X POST "${{ secrets.DOKPLOY_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "x-github-event: push" \
+            -d "{\"ref\": \"refs/heads/${{ github.ref_name }}\", \"commits\": []}")
+          echo "HTTP status: $status"
+          echo "Response body:"
+          cat /tmp/dokploy-response.txt
+          if [ "$status" != "200" ]; then
+            echo "::error::Dokploy webhook returned HTTP $status"
+            exit 1
+          fi

@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+@theme {
+	--font-display: 'Fredoka', ui-rounded, 'Comic Sans MS', sans-serif;
+
+	--color-toon-sky: #58c6f0;
+	--color-toon-sun: #ffd23f;
+	--color-toon-coral: #ff6b6b;
+	--color-toon-grass: #4ecb71;
+	--color-toon-grape: #a06bff;
+	--color-toon-bubble: #fff8ec;
+	--color-toon-ink: #2b2140;
+}
+
+body {
+	font-family: var(--font-display);
+}
+
+@keyframes toon-pop {
+	0% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(1.08);
+	}
+	100% {
+		transform: scale(1);
+	}
+}
+
+.animate-toon-pop {
+	animation: toon-pop 0.25s ease-out;
+}

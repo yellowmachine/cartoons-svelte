@@ -1,0 +1,7 @@
+# Package Managers
+package-lock.json
+bun.lock
+
+# Miscellaneous
+/static/
+/build/
