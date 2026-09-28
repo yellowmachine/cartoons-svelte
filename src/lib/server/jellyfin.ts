@@ -90,7 +90,10 @@ export async function listFolders(): Promise<FolderOption[]> {
 		getLibraryRoots()
 	]);
 
-	const folders: FolderOption[] = [];
+	// Recogemos primero todas las carpetas "en bruto": puede haber nombres repetidos
+	// si dos bibliotecas (o dos ubicaciones dentro de una) apuntan a contenido con el
+	// mismo nombre visible (p.ej. la misma serie añadida dos veces).
+	const raw: FolderOption[] = [];
 	for (const view of views.Items) {
 		const children = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
 			ParentId: view.Id,
@@ -100,7 +103,7 @@ export async function listFolders(): Promise<FolderOption[]> {
 
 		const realFolders = children.Items.filter((c) => c.IsFolder);
 		if (realFolders.length > 0) {
-			for (const folder of realFolders) folders.push({ id: folder.Id, name: folder.Name });
+			for (const folder of realFolders) raw.push({ id: folder.Id, name: folder.Name });
 			continue;
 		}
 
@@ -118,11 +121,23 @@ export async function listFolders(): Promise<FolderOption[]> {
 			if (!root || !name || seen.has(name)) continue;
 			seen.add(name);
 			const id = `path:${view.Id}:${encodeURIComponent(root)}:${encodeURIComponent(name)}`;
-			folders.push({ id, name });
+			raw.push({ id, name });
 		}
 	}
 
-	return folders;
+	// Un único checkbox por nombre: si el mismo nombre viene de varias fuentes,
+	// se fusionan en un id "multi:" que al seleccionarlo consulta todas ellas.
+	const byName = new Map<string, string[]>();
+	for (const folder of raw) {
+		const ids = byName.get(folder.name) ?? [];
+		ids.push(folder.id);
+		byName.set(folder.name, ids);
+	}
+
+	return [...byName.entries()].map(([name, ids]) => ({
+		name,
+		id: ids.length === 1 ? ids[0] : `multi:${encodeURIComponent(JSON.stringify(ids))}`
+	}));
 }
 
 async function unwatchedItemsForRealFolder(folderId: string): Promise<JfItem[]> {
@@ -154,6 +169,11 @@ async function unwatchedItemsForPathFolder(
 }
 
 async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
+	if (folderId.startsWith('multi:')) {
+		const ids: string[] = JSON.parse(decodeURIComponent(folderId.slice('multi:'.length)));
+		const pools = await Promise.all(ids.map(unwatchedItemsForFolder));
+		return pools.flat();
+	}
 	if (folderId.startsWith('path:')) {
 		const [, viewId, encodedRoot, encodedName] = folderId.split(':');
 		return unwatchedItemsForPathFolder(
