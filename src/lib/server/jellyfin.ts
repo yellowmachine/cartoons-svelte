@@ -114,15 +114,28 @@ async function findExistingPlaylistId(): Promise<string | undefined> {
 
 export async function generateTodayPlaylist(
 	folderIds: string[],
-	count = 10
+	count = 10,
+	maxPerFolder = 2
 ): Promise<{ playlistId: string; items: PlaylistItem[] }> {
 	const { userId } = config();
 
+	// Como mucho `maxPerFolder` items por carpeta, aunque el total no llegue a `count`
+	// — si no, una carpeta con muchísimo contenido se comería todo el resultado.
 	const pools = await Promise.all(folderIds.map(unwatchedItemsForFolder));
-	const byId = new Map<string, JfItem>();
-	for (const item of pools.flat()) byId.set(item.Id, item);
+	const seenIds = new Set<string>();
+	const capped: JfItem[] = [];
+	for (const pool of pools) {
+		let taken = 0;
+		for (const item of shuffle(pool)) {
+			if (taken >= maxPerFolder) break;
+			if (seenIds.has(item.Id)) continue;
+			seenIds.add(item.Id);
+			capped.push(item);
+			taken++;
+		}
+	}
 
-	const chosen = shuffle([...byId.values()]).slice(0, count);
+	const chosen = shuffle(capped).slice(0, count);
 	if (chosen.length === 0) {
 		throw new Error('No se encontraron items sin ver en las carpetas seleccionadas');
 	}
