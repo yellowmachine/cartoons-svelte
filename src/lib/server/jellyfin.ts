@@ -112,13 +112,20 @@ async function findExistingPlaylistId(): Promise<string | undefined> {
 	return Items.find((item) => item.Name === PLAYLIST_NAME)?.Id;
 }
 
-export async function generateTodayPlaylist(
+function toPlaylistItem(item: JfItem): PlaylistItem {
+	return {
+		id: item.Id,
+		name: item.Name,
+		seriesName: item.SeriesName,
+		hasImage: Boolean(item.ImageTags?.Primary)
+	};
+}
+
+export async function pickCandidateItems(
 	folderIds: string[],
 	count = 10,
 	maxPerFolder = 2
-): Promise<{ playlistId: string; items: PlaylistItem[] }> {
-	const { userId } = config();
-
+): Promise<PlaylistItem[]> {
 	// Como mucho `maxPerFolder` items por carpeta, aunque el total no llegue a `count`
 	// — si no, una carpeta con muchísimo contenido se comería todo el resultado.
 	const pools = await Promise.all(folderIds.map(unwatchedItemsForFolder));
@@ -139,6 +146,14 @@ export async function generateTodayPlaylist(
 	if (chosen.length === 0) {
 		throw new Error('No se encontraron items sin ver en las carpetas seleccionadas');
 	}
+	return chosen.map(toPlaylistItem);
+}
+
+export async function createTodayPlaylist(itemIds: string[]): Promise<{ playlistId: string }> {
+	const { userId } = config();
+	if (itemIds.length === 0) {
+		throw new Error('No hay items seleccionados para la playlist');
+	}
 
 	const existingId = await findExistingPlaylistId();
 	if (existingId) {
@@ -152,22 +167,14 @@ export async function generateTodayPlaylist(
 			method: 'POST',
 			body: JSON.stringify({
 				Name: PLAYLIST_NAME,
-				Ids: chosen.map((item) => item.Id),
+				Ids: itemIds,
 				UserId: userId,
 				MediaType: 'Video'
 			})
 		}
 	);
 
-	return {
-		playlistId: created.Id,
-		items: chosen.map((item) => ({
-			id: item.Id,
-			name: item.Name,
-			seriesName: item.SeriesName,
-			hasImage: Boolean(item.ImageTags?.Primary)
-		}))
-	};
+	return { playlistId: created.Id };
 }
 
 export async function listSessions(): Promise<ClientSession[]> {

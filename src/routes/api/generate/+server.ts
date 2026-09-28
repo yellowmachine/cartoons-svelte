@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { generateTodayPlaylist, listSessions } from '$lib/server/jellyfin';
+import { pickCandidateItems } from '$lib/server/jellyfin';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -15,11 +15,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	try {
-		const [{ playlistId, items }, sessions] = await Promise.all([
-			generateTodayPlaylist(folderIds),
-			listSessions()
-		]);
-		return json({ playlistId, items, sessions });
+		const items = await pickCandidateItems(folderIds);
+		return json({ items });
 	} catch (err) {
 		error(502, err instanceof Error ? err.message : 'Error hablando con Jellyfin');
 	}

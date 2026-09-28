@@ -33,21 +33,37 @@
 	let generateError = $state<string | null>(null);
 
 	let items = $state<PlaylistItem[]>([]);
-	let sessions = $state<ClientSession[]>([]);
+	let excluded = new SvelteSet<string>();
 	let hasGenerated = $state(false);
+
+	let confirming = $state(false);
+	let confirmError = $state<string | null>(null);
+	let confirmed = $state(false);
+	let confirmedItemIds = $state<string[]>([]);
+	let sessions = $state<ClientSession[]>([]);
 
 	let playingSessionId = $state<string | null>(null);
 	let playedSessionId = $state<string | null>(null);
 	let playError = $state<string | null>(null);
+
+	const includedCount = $derived(items.length - excluded.size);
 
 	function toggleFolder(id: string) {
 		if (selected.has(id)) selected.delete(id);
 		else selected.add(id);
 	}
 
+	function toggleItem(id: string) {
+		if (excluded.has(id)) excluded.delete(id);
+		else excluded.add(id);
+	}
+
 	async function generate() {
 		generating = true;
 		generateError = null;
+		confirmed = false;
+		confirmError = null;
+		sessions = [];
 		playedSessionId = null;
 		try {
 			const res = await fetch('/api/generate', {
@@ -61,12 +77,39 @@
 			}
 			const result = await res.json();
 			items = result.items;
-			sessions = result.sessions;
+			excluded.clear();
 			hasGenerated = true;
 		} catch (err) {
 			generateError = err instanceof Error ? err.message : 'Algo fue mal';
 		} finally {
 			generating = false;
+		}
+	}
+
+	async function confirmPlaylist() {
+		const itemIds = items.filter((i) => !excluded.has(i.id)).map((i) => i.id);
+		if (itemIds.length === 0) return;
+
+		confirming = true;
+		confirmError = null;
+		try {
+			const res = await fetch('/api/playlist', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ itemIds })
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				throw new Error(body?.message ?? `Error ${res.status}`);
+			}
+			const result = await res.json();
+			confirmedItemIds = itemIds;
+			sessions = result.sessions;
+			confirmed = true;
+		} catch (err) {
+			confirmError = err instanceof Error ? err.message : 'Algo fue mal';
+		} finally {
+			confirming = false;
 		}
 	}
 
@@ -80,7 +123,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					sessionId: session.id,
-					itemIds: items.map((i) => i.id)
+					itemIds: confirmedItemIds
 				})
 			});
 			if (!res.ok) {
@@ -159,7 +202,7 @@
 							hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
 							disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						{generating ? '🎲 Buscando…' : '🎲 10 al azar y crear "Para ver hoy"'}
+						{generating ? '🎲 Buscando…' : '🎲 10 al azar'}
 					</button>
 
 					{#if generateError}
@@ -175,59 +218,96 @@
 					{#if items.length === 0}
 						<p class="text-toon-ink/70">No había nada sin ver en esas carpetas.</p>
 					{:else}
+						<p class="text-toon-ink/70 mb-4 text-sm">
+							Desmarca lo que no te apetezca ver hoy antes de crear la lista.
+						</p>
 						<ul class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-5">
 							{#each items as item (item.id)}
-								<li class="overflow-hidden rounded-2xl bg-white shadow-md">
-									{#if item.hasImage}
-										<img
-											src="/api/image/{item.id}"
-											alt={item.name}
-											class="aspect-2/3 w-full object-cover"
-											loading="lazy"
-										/>
-									{:else}
-										<div
-											class="bg-toon-grape/20 flex aspect-2/3 w-full items-center justify-center text-4xl"
+								{@const included = !excluded.has(item.id)}
+								<li>
+									<button
+										type="button"
+										onclick={() => toggleItem(item.id)}
+										class="relative block w-full overflow-hidden rounded-2xl bg-white text-left shadow-md transition
+											{included ? '' : 'opacity-40 grayscale'}"
+									>
+										<span
+											class="absolute top-2 right-2 z-10 flex h-6 w-6 items-center justify-center rounded-md border-2 shadow
+												{included
+												? 'text-toon-grape border-toon-grape bg-white'
+												: 'border-white/70 bg-black/30 text-white'}"
 										>
-											🎬
-										</div>
-									{/if}
-									<div class="p-2">
-										<p class="text-toon-ink truncate text-sm font-semibold">{item.name}</p>
-										{#if item.seriesName}
-											<p class="text-toon-ink/60 truncate text-xs">{item.seriesName}</p>
+											{#if included}✓{/if}
+										</span>
+										{#if item.hasImage}
+											<img
+												src="/api/image/{item.id}"
+												alt={item.name}
+												class="aspect-2/3 w-full object-cover"
+												loading="lazy"
+											/>
+										{:else}
+											<div
+												class="bg-toon-grape/20 flex aspect-2/3 w-full items-center justify-center text-4xl"
+											>
+												🎬
+											</div>
 										{/if}
-									</div>
+										<div class="p-2">
+											<p class="text-toon-ink truncate text-sm font-semibold">{item.name}</p>
+											{#if item.seriesName}
+												<p class="text-toon-ink/60 truncate text-xs">{item.seriesName}</p>
+											{/if}
+										</div>
+									</button>
 								</li>
 							{/each}
 						</ul>
 
-						<h3 class="text-toon-ink mt-8 mb-3 text-xl font-semibold">📱 ¿Dónde lo vemos?</h3>
-						{#if sessions.length === 0}
-							<p class="text-toon-ink/70">No hay ningún Jellyfin abierto ahora mismo.</p>
-						{:else}
-							<div class="flex flex-wrap gap-3">
-								{#each sessions as session (session.id)}
-									<button
-										type="button"
-										disabled={playingSessionId === session.id}
-										onclick={() => playOn(session)}
-										class="bg-toon-grass rounded-full px-5 py-3 font-bold text-white shadow-[0_4px_0_rgba(43,33,64,0.25)]
-											transition hover:brightness-105 active:translate-y-0.5 active:shadow-[0_1px_0_rgba(43,33,64,0.25)]
-											disabled:cursor-wait disabled:opacity-70"
-									>
-										{#if playingSessionId === session.id}
-											⏳ Enviando…
-										{:else if playedSessionId === session.id}
-											✅ Reproduciendo en {session.deviceName}
-										{:else}
-											▶️ Play en {session.deviceName}
-										{/if}
-									</button>
-								{/each}
-							</div>
-							{#if playError}
-								<p class="text-toon-coral mt-3 font-medium">{playError}</p>
+						<button
+							type="button"
+							disabled={includedCount === 0 || confirming}
+							onclick={confirmPlaylist}
+							class="bg-toon-grape mt-6 w-full rounded-full px-6 py-4 text-xl font-bold text-white
+								shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+								hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+								disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{confirming ? '✅ Creando…' : `✅ Crear "Para ver hoy" con ${includedCount}`}
+						</button>
+
+						{#if confirmError}
+							<p class="text-toon-coral mt-3 text-center font-medium">{confirmError}</p>
+						{/if}
+
+						{#if confirmed}
+							<h3 class="text-toon-ink mt-8 mb-3 text-xl font-semibold">📱 ¿Dónde lo vemos?</h3>
+							{#if sessions.length === 0}
+								<p class="text-toon-ink/70">No hay ningún Jellyfin abierto ahora mismo.</p>
+							{:else}
+								<div class="flex flex-wrap gap-3">
+									{#each sessions as session (session.id)}
+										<button
+											type="button"
+											disabled={playingSessionId === session.id}
+											onclick={() => playOn(session)}
+											class="bg-toon-grass rounded-full px-5 py-3 font-bold text-white shadow-[0_4px_0_rgba(43,33,64,0.25)]
+												transition hover:brightness-105 active:translate-y-0.5 active:shadow-[0_1px_0_rgba(43,33,64,0.25)]
+												disabled:cursor-wait disabled:opacity-70"
+										>
+											{#if playingSessionId === session.id}
+												⏳ Enviando…
+											{:else if playedSessionId === session.id}
+												✅ Reproduciendo en {session.deviceName}
+											{:else}
+												▶️ Play en {session.deviceName}
+											{/if}
+										</button>
+									{/each}
+								</div>
+								{#if playError}
+									<p class="text-toon-coral mt-3 font-medium">{playError}</p>
+								{/if}
 							{/if}
 						{/if}
 					{/if}
