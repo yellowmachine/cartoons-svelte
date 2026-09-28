@@ -95,33 +95,43 @@ export async function listFolders(): Promise<FolderOption[]> {
 	// mismo nombre visible (p.ej. la misma serie añadida dos veces).
 	const raw: FolderOption[] = [];
 	for (const view of views.Items) {
+		const roots = libraryRoots.get(view.Id) ?? [];
+
+		if (roots.length > 0) {
+			// Miramos TODOS los items de la biblioteca a cualquier profundidad (no solo
+			// el primer nivel): algunas series meten cada episodio en su propia
+			// subcarpeta, así que solo el Path completo hasta la raíz física nos dice
+			// de forma fiable cuál es la carpeta madre real, sin importar cuántos
+			// niveles haya entre medias.
+			const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
+				ParentId: view.Id,
+				Recursive: 'true',
+				IncludeItemTypes: ITEM_TYPES,
+				Fields: 'Path'
+			});
+
+			const seen = new Set<string>();
+			for (const item of Items) {
+				if (!item.Path) continue;
+				const root = roots.find((r) => folderUnderRoot(item.Path!, r) !== undefined);
+				const name = root ? folderUnderRoot(item.Path, root) : undefined;
+				if (!root || !name || seen.has(name)) continue;
+				seen.add(name);
+				const id = `path:${view.Id}:${encodeURIComponent(root)}:${encodeURIComponent(name)}`;
+				raw.push({ id, name });
+			}
+			continue;
+		}
+
+		// Sin raíz física conocida para esta biblioteca (p.ej. una fuente remota):
+		// como último recurso, usamos las carpetas que el propio Jellyfin exponga.
 		const children = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
 			ParentId: view.Id,
 			Recursive: 'false',
 			Fields: 'Path'
 		});
-
-		const realFolders = children.Items.filter((c) => c.IsFolder);
-		if (realFolders.length > 0) {
-			for (const folder of realFolders) raw.push({ id: folder.Id, name: folder.Name });
-			continue;
-		}
-
-		// Esta biblioteca es "plana" (Jellyfin devuelve los ficheros directamente, sin
-		// exponer las carpetas físicas): derivamos la carpeta madre a partir del Path
-		// de cada item, recortado justo debajo de la raíz real de la biblioteca.
-		const roots = libraryRoots.get(view.Id) ?? [];
-		if (roots.length === 0) continue;
-
-		const seen = new Set<string>();
-		for (const item of children.Items) {
-			if (!item.Path) continue;
-			const root = roots.find((r) => folderUnderRoot(item.Path!, r) !== undefined);
-			const name = root ? folderUnderRoot(item.Path, root) : undefined;
-			if (!root || !name || seen.has(name)) continue;
-			seen.add(name);
-			const id = `path:${view.Id}:${encodeURIComponent(root)}:${encodeURIComponent(name)}`;
-			raw.push({ id, name });
+		for (const folder of children.Items.filter((c) => c.IsFolder)) {
+			raw.push({ id: folder.Id, name: folder.Name });
 		}
 	}
 
