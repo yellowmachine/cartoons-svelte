@@ -75,10 +75,10 @@ export async function listFolders(): Promise<FolderOption[]> {
 	}));
 }
 
-async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
+async function itemsForFolder(folderId: string, excludeWatched: boolean): Promise<JfItem[]> {
 	if (folderId.startsWith('multi:')) {
 		const ids: string[] = JSON.parse(decodeURIComponent(folderId.slice('multi:'.length)));
-		const pools = await Promise.all(ids.map(unwatchedItemsForFolder));
+		const pools = await Promise.all(ids.map((id) => itemsForFolder(id, excludeWatched)));
 		return pools.flat();
 	}
 
@@ -87,7 +87,7 @@ async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
 		ParentId: folderId,
 		Recursive: 'true',
 		IncludeItemTypes: ITEM_TYPES,
-		Filters: 'IsUnplayed',
+		...(excludeWatched ? { Filters: 'IsUnplayed' } : {}),
 		Fields: 'SeriesName,ImageTags'
 	});
 	return Items;
@@ -123,12 +123,13 @@ function toPlaylistItem(item: JfItem): PlaylistItem {
 
 export async function pickCandidateItems(
 	folderIds: string[],
+	excludeWatched = true,
 	count = 10,
 	maxPerFolder = 2
 ): Promise<PlaylistItem[]> {
 	// Como mucho `maxPerFolder` items por carpeta, aunque el total no llegue a `count`
 	// — si no, una carpeta con muchísimo contenido se comería todo el resultado.
-	const pools = await Promise.all(folderIds.map(unwatchedItemsForFolder));
+	const pools = await Promise.all(folderIds.map((id) => itemsForFolder(id, excludeWatched)));
 	const seenIds = new Set<string>();
 	const capped: JfItem[] = [];
 	for (const pool of pools) {
@@ -144,7 +145,11 @@ export async function pickCandidateItems(
 
 	const chosen = shuffle(capped).slice(0, count);
 	if (chosen.length === 0) {
-		throw new Error('No se encontraron items sin ver en las carpetas seleccionadas');
+		throw new Error(
+			excludeWatched
+				? 'No se encontraron items sin ver en las carpetas seleccionadas'
+				: 'No se encontraron items en las carpetas seleccionadas'
+		);
 	}
 	return chosen.map(toPlaylistItem);
 }

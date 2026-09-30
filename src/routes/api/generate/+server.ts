@@ -5,6 +5,8 @@ import type { RequestHandler } from './$types';
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json().catch(() => null);
 	const folderIds: unknown = body?.folderIds;
+	// Por defecto se excluyen los ya vistos; solo un `false` explícito los incluye.
+	const excludeWatched = body?.excludeWatched !== false;
 
 	if (
 		!Array.isArray(folderIds) ||
@@ -15,7 +17,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	try {
-		const items = await pickCandidateItems(folderIds);
+		const items = await pickCandidateItems(folderIds, excludeWatched);
 		return json({ items });
 	} catch (err) {
 		error(502, err instanceof Error ? err.message : 'Error hablando con Jellyfin');

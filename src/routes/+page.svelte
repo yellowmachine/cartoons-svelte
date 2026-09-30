@@ -4,6 +4,7 @@
 	import type { ClientSession, FolderOption, PlaylistItem } from '$lib/types';
 
 	const SELECTED_FOLDERS_KEY = 'cartoons:selectedFolders';
+	const EXCLUDE_WATCHED_KEY = 'cartoons:excludeWatched';
 
 	function loadStoredSelection(): string[] {
 		if (!browser) return [];
@@ -12,6 +13,15 @@
 			return raw ? JSON.parse(raw) : [];
 		} catch {
 			return [];
+		}
+	}
+
+	function loadStoredExcludeWatched(): boolean {
+		if (!browser) return true;
+		try {
+			return localStorage.getItem(EXCLUDE_WATCHED_KEY) !== 'false';
+		} catch {
+			return true;
 		}
 	}
 
@@ -29,6 +39,18 @@
 			// localStorage puede no estar disponible (modo privado, cuota llena…); no es crítico.
 		}
 	});
+
+	let excludeWatched = $state(loadStoredExcludeWatched());
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.setItem(EXCLUDE_WATCHED_KEY, String(excludeWatched));
+		} catch {
+			// Igual que con las carpetas: si no se puede guardar, no pasa nada.
+		}
+	});
+
 	let generating = $state(false);
 	let generateError = $state<string | null>(null);
 
@@ -69,7 +91,7 @@
 			const res = await fetch('/api/generate', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ folderIds: [...selected] })
+				body: JSON.stringify({ folderIds: [...selected], excludeWatched })
 			});
 			if (!res.ok) {
 				const body = await res.json().catch(() => null);
@@ -178,7 +200,19 @@
 			</div>
 		{:else}
 			<section class="bg-toon-bubble rounded-3xl p-6 shadow-xl sm:p-8">
-				<h2 class="text-toon-ink mb-4 text-2xl font-semibold">🗂️ Carpetas</h2>
+				<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+					<h2 class="text-toon-ink text-2xl font-semibold">🗂️ Carpetas</h2>
+					<label
+						class="text-toon-ink flex cursor-pointer items-center gap-2 font-semibold select-none"
+					>
+						<input
+							type="checkbox"
+							bind:checked={excludeWatched}
+							class="accent-toon-grape h-5 w-5 cursor-pointer"
+						/>
+						Excluir los ya vistos
+					</label>
+				</div>
 
 				{#if folders.length === 0}
 					<p class="text-toon-ink/70">No se han encontrado carpetas en tu Jellyfin.</p>
@@ -227,7 +261,11 @@
 					<h2 class="text-toon-ink mb-4 text-2xl font-semibold">✨ Para ver hoy</h2>
 
 					{#if items.length === 0}
-						<p class="text-toon-ink/70">No había nada sin ver en esas carpetas.</p>
+						<p class="text-toon-ink/70">
+							{excludeWatched
+								? 'No había nada sin ver en esas carpetas.'
+								: 'No había nada en esas carpetas.'}
+						</p>
 					{:else}
 						<p class="text-toon-ink/70 mb-4 text-sm">
 							Desmarca lo que no te apetezca ver hoy antes de crear la lista.
