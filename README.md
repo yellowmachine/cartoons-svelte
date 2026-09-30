@@ -53,6 +53,10 @@ Variables de la app:
 - `ADMIN_PASSWORD`: si la defines, la app pide esta contraseña antes de dejar entrar (una cookie
   de 10 años recuerda la sesión). Recomendado si el dominio es accesible desde internet, como
   `cartoons.scholio.review`. Vacío o sin definir = sin contraseña.
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`: para el botón «🎤 Pídemelo». Graba lo que dices
+  («hazme una lista con Chicho Terremoto, David el Gnomo y el Conde Pátula»), OpenAI lo
+  transcribe y Claude elige las carpetas que encajan; el resultado sale en «Para ver hoy» como
+  con los otros botones. El micrófono solo funciona sobre https o localhost.
 
 Variables del bridge (en casa, nunca en el VPS):
 
@@ -122,7 +126,7 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
 En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
 `ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las
 variables de entorno `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN`, `CF_ACCESS_CLIENT_ID`,
-`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD` y `ORIGIN` (esta última con el dominio público que le
+`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
 asignes). No hace falta publicar/exponer el puerto al host:
 Traefik llega al contenedor por la red interna que gestiona Dokploy — `compose.yaml` no
 interviene en este flujo, es solo para desarrollo local.

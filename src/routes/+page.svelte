@@ -83,6 +83,7 @@
 	async function generate(mode: 'random' | 'continue') {
 		generating = mode;
 		generateError = null;
+		transcript = null;
 		confirmed = false;
 		confirmError = null;
 		sessions = [];
@@ -105,6 +106,76 @@
 			generateError = err instanceof Error ? err.message : 'Algo fue mal';
 		} finally {
 			generating = null;
+		}
+	}
+
+	// getUserMedia solo funciona en un contexto seguro (https o localhost).
+	const micSupported = browser && window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+
+	let recording = $state(false);
+	let listening = $state(false);
+	let transcript = $state<string | null>(null);
+	let mediaRecorder: MediaRecorder | null = null;
+
+	async function toggleRecording() {
+		if (recording) {
+			mediaRecorder?.stop();
+			return;
+		}
+
+		generateError = null;
+		transcript = null;
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const chunks: Blob[] = [];
+			const recorder = new MediaRecorder(stream);
+			recorder.ondataavailable = (e) => {
+				if (e.data.size > 0) chunks.push(e.data);
+			};
+			recorder.onstop = () => {
+				stream.getTracks().forEach((t) => t.stop());
+				recording = false;
+				askAssistant(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+			};
+			recorder.start();
+			mediaRecorder = recorder;
+			recording = true;
+		} catch {
+			generateError = 'No se ha podido acceder al micrófono';
+		}
+	}
+
+	async function askAssistant(audio: Blob) {
+		listening = true;
+		confirmed = false;
+		confirmError = null;
+		sessions = [];
+		playedSessionId = null;
+		try {
+			const res = await fetch('/api/assistant', {
+				method: 'POST',
+				headers: { 'Content-Type': audio.type },
+				body: audio
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				throw new Error(body?.message ?? `Error ${res.status}`);
+			}
+			const result = await res.json();
+			transcript = result.transcript;
+			if (result.folderIds.length === 0) {
+				throw new Error('No he encontrado ninguna carpeta que encaje');
+			}
+			selected.clear();
+			for (const id of result.folderIds) selected.add(id);
+			excludeWatched = result.excludeWatched;
+			items = result.items;
+			excluded.clear();
+			hasGenerated = true;
+		} catch (err) {
+			generateError = err instanceof Error ? err.message : 'Algo fue mal';
+		} finally {
+			listening = false;
 		}
 	}
 
@@ -262,6 +333,30 @@
 							{generating === 'continue' ? '▶️ Buscando…' : '▶️ Continuar'}
 						</button>
 					</div>
+
+					<button
+						type="button"
+						disabled={!micSupported || listening || generating !== null}
+						onclick={toggleRecording}
+						title={micSupported ? undefined : 'El micrófono necesita https o localhost'}
+						class="mt-3 w-full rounded-full px-6 py-4 text-xl font-bold text-white
+							shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+							hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+							disabled:cursor-not-allowed disabled:opacity-50
+							{recording ? 'animate-pulse bg-red-500' : 'bg-toon-grape'}"
+					>
+						{#if recording}
+							⏹️ Escuchando… pulsa para terminar
+						{:else if listening}
+							🤔 Pensando…
+						{:else}
+							🎤 Pídemelo
+						{/if}
+					</button>
+
+					{#if transcript}
+						<p class="text-toon-ink/70 mt-2 text-center text-sm italic">«{transcript}»</p>
+					{/if}
 
 					{#if selected.size > 1}
 						<p class="text-toon-ink/60 mt-2 text-center text-sm">
