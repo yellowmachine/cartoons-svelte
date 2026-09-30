@@ -51,7 +51,7 @@
 		}
 	});
 
-	let generating = $state(false);
+	let generating = $state<'random' | 'continue' | null>(null);
 	let generateError = $state<string | null>(null);
 
 	let items = $state<PlaylistItem[]>([]);
@@ -80,8 +80,8 @@
 		else excluded.add(id);
 	}
 
-	async function generate() {
-		generating = true;
+	async function generate(mode: 'random' | 'continue') {
+		generating = mode;
 		generateError = null;
 		confirmed = false;
 		confirmError = null;
@@ -91,7 +91,7 @@
 			const res = await fetch('/api/generate', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ folderIds: [...selected], excludeWatched })
+				body: JSON.stringify({ folderIds: [...selected], excludeWatched, mode })
 			});
 			if (!res.ok) {
 				const body = await res.json().catch(() => null);
@@ -104,7 +104,7 @@
 		} catch (err) {
 			generateError = err instanceof Error ? err.message : 'Algo fue mal';
 		} finally {
-			generating = false;
+			generating = null;
 		}
 	}
 
@@ -238,17 +238,36 @@
 						{/each}
 					</div>
 
-					<button
-						type="button"
-						disabled={selected.size === 0 || generating}
-						onclick={generate}
-						class="bg-toon-sun text-toon-ink mt-6 w-full rounded-full px-6 py-4 text-xl font-bold
-							shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
-							hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
-							disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{generating ? '🎲 Buscando…' : '🎲 10 al azar'}
-					</button>
+					<div class="mt-6 flex flex-col gap-3 sm:flex-row">
+						<button
+							type="button"
+							disabled={selected.size === 0 || generating !== null}
+							onclick={() => generate('random')}
+							class="bg-toon-sun text-toon-ink w-full rounded-full px-6 py-4 text-xl font-bold
+								shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+								hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+								disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{generating === 'random' ? '🎲 Buscando…' : '🎲 10 al azar'}
+						</button>
+						<button
+							type="button"
+							disabled={selected.size !== 1 || generating !== null}
+							onclick={() => generate('continue')}
+							class="bg-toon-coral w-full rounded-full px-6 py-4 text-xl font-bold text-white
+								shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+								hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+								disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{generating === 'continue' ? '▶️ Buscando…' : '▶️ Continuar'}
+						</button>
+					</div>
+
+					{#if selected.size > 1}
+						<p class="text-toon-ink/60 mt-2 text-center text-sm">
+							Marca solo una carpeta para continuar
+						</p>
+					{/if}
 
 					{#if generateError}
 						<p class="text-toon-coral mt-3 text-center font-medium">{generateError}</p>

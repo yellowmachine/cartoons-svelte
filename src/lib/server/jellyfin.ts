@@ -8,6 +8,11 @@ type JfItem = {
 	Id: string;
 	Name: string;
 	SeriesName?: string;
+	SortName?: string;
+	/** Número de temporada (en episodios). */
+	ParentIndexNumber?: number;
+	/** Número de episodio dentro de la temporada. */
+	IndexNumber?: number;
 	ImageTags?: Record<string, string>;
 };
 
@@ -88,7 +93,7 @@ async function itemsForFolder(folderId: string, excludeWatched: boolean): Promis
 		Recursive: 'true',
 		IncludeItemTypes: ITEM_TYPES,
 		...(excludeWatched ? { Filters: 'IsUnplayed' } : {}),
-		Fields: 'SeriesName,ImageTags'
+		Fields: 'SeriesName,SortName,ImageTags'
 	});
 	return Items;
 }
@@ -150,6 +155,28 @@ export async function pickCandidateItems(
 				? 'No se encontraron items sin ver en las carpetas seleccionadas'
 				: 'No se encontraron items en las carpetas seleccionadas'
 		);
+	}
+	return chosen.map(toPlaylistItem);
+}
+
+/** Temporada, episodio y nombre; lo que no tenga numeración va al final. */
+function compareEpisodeOrder(a: JfItem, b: JfItem): number {
+	const season = (a.ParentIndexNumber ?? Infinity) - (b.ParentIndexNumber ?? Infinity);
+	if (season) return season;
+	const episode = (a.IndexNumber ?? Infinity) - (b.IndexNumber ?? Infinity);
+	if (episode) return episode;
+	return (a.SortName ?? a.Name).localeCompare(b.SortName ?? b.Name, undefined, { numeric: true });
+}
+
+/**
+ * Los siguientes `count` items sin ver de una carpeta, en orden. Se ordena aquí
+ * y no en Jellyfin porque las carpetas "multi:" juntan varias bibliotecas.
+ */
+export async function nextItemsInFolder(folderId: string, count = 10): Promise<PlaylistItem[]> {
+	const pool = await itemsForFolder(folderId, true);
+	const chosen = pool.sort(compareEpisodeOrder).slice(0, count);
+	if (chosen.length === 0) {
+		throw new Error('No quedan items sin ver en esa carpeta');
 	}
 	return chosen.map(toPlaylistItem);
 }
