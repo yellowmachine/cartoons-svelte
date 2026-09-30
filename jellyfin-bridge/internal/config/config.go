@@ -22,6 +22,11 @@ type Config struct {
 	ListenAddr     string
 	Token          string
 	LogLevel       slog.Level
+
+	// Update webhook; empty UpdateToken disables POST /admin/update.
+	UpdateToken     string
+	WatchtowerURL   string
+	WatchtowerToken string
 }
 
 // Load reads the configuration. getenv and readFile are injected for tests.
@@ -83,6 +88,25 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		errs = append(errs, errors.New("API_TOKEN (or API_TOKEN_FILE) is required"))
 	case len(cfg.Token) < MinTokenLength:
 		errs = append(errs, fmt.Errorf("API_TOKEN must be at least %d characters (try: openssl rand -hex 32)", MinTokenLength))
+	}
+
+	// The update webhook is optional; when UPDATE_TOKEN is set it needs
+	// Watchtower. It has its own token so the app's can't trigger updates.
+	cfg.UpdateToken = secret("UPDATE_TOKEN")
+	if cfg.UpdateToken != "" {
+		if len(cfg.UpdateToken) < MinTokenLength {
+			errs = append(errs, fmt.Errorf("UPDATE_TOKEN must be at least %d characters (try: openssl rand -hex 32)", MinTokenLength))
+		}
+		if cfg.UpdateToken == cfg.Token {
+			errs = append(errs, errors.New("UPDATE_TOKEN must differ from API_TOKEN"))
+		}
+		cfg.WatchtowerURL = get("WATCHTOWER_URL", "http://watchtower:8080")
+		if u, err := url.Parse(cfg.WatchtowerURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("WATCHTOWER_URL must be an http:// or https:// URL"))
+		}
+		if cfg.WatchtowerToken = secret("WATCHTOWER_TOKEN"); cfg.WatchtowerToken == "" {
+			errs = append(errs, errors.New("WATCHTOWER_TOKEN (or WATCHTOWER_TOKEN_FILE) is required when UPDATE_TOKEN is set"))
+		}
 	}
 
 	if err := cfg.LogLevel.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {

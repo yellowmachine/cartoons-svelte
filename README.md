@@ -104,7 +104,9 @@ de `.env` (la app apunta al bridge local, ignorando `JELLYFIN_BRIDGE_URL`).
 
 - **`.github/workflows/ci.yml`**: en cada push/PR corre type-check, lint y build.
 - **`.github/workflows/jellyfin-bridge.yml`**: cuando cambia `jellyfin-bridge/`, corre gofmt, vet y
-  tests; en push a `main` publica `ghcr.io/<owner>/<repo>-jellyfin-bridge` (amd64 + arm64).
+  tests; en push a `main` publica `ghcr.io/<owner>/<repo>-jellyfin-bridge` (amd64 + arm64) y
+  avisa al bridge de casa para que Watchtower lo actualice (ver
+  [Automatic updates](jellyfin-bridge/README.md#automatic-updates)).
 - **`.github/workflows/build-deploy.yml`**: en push a `main`, construye la imagen multi-arquitectura
   (`linux/amd64` + `linux/arm64`) y la publica en GHCR (`ghcr.io/<owner>/<repo>`), y dispara el
   webhook de deploy de Dokploy.
@@ -113,6 +115,9 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
 
 - `DOKPLOY_WEBHOOK_URL`: URL del webhook de deploy de la aplicación en Dokploy (se genera en la
   configuración de deploy → "Custom Git" o el webhook de tu app).
+- `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_UPDATE_TOKEN`, `CF_ACCESS_CLIENT_ID`,
+  `CF_ACCESS_CLIENT_SECRET`: para el aviso de actualización al bridge. Sin los dos primeros, ese
+  paso se salta.
 
 En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
 `ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las

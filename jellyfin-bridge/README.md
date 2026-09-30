@@ -20,17 +20,22 @@ VPS (cartoons) ──HTTPS──▶ Cloudflare Access ──tunnel──▶ clou
 
 ## Configuration
 
-| Variable                | Default          | Notes                                                                        |
-| ----------------------- | ---------------- | ---------------------------------------------------------------------------- |
-| `API_TOKEN`             | —                | **Required**, at least 32 characters (`openssl rand -hex 32`).               |
-| `API_TOKEN_FILE`        | —                | Read the token from a file (Docker secrets). Use one or the other.           |
-| `JELLYFIN_URL`          | —                | **Required**. Jellyfin as seen from the bridge, e.g. `http://jellyfin:8096`. |
-| `JELLYFIN_USER_ID`      | —                | **Required**. The user whose libraries, playlists and sessions are used.     |
-| `JELLYFIN_API_KEY`      | —                | **Required**. Dashboard → API Keys.                                          |
-| `JELLYFIN_API_KEY_FILE` | —                | Read the API key from a file. Use one or the other.                          |
-| `PLAYLIST_NAME`         | `Para ver hoy`   | The playlist that `PUT /playlist` replaces.                                  |
-| `LISTEN_ADDR`           | `127.0.0.1:8787` | Use `0.0.0.0:8787` inside compose, with no `ports:` published.               |
-| `LOG_LEVEL`             | `info`           | `debug` also logs `/healthz` requests.                                       |
+| Variable                | Default                  | Notes                                                                             |
+| ----------------------- | ------------------------ | --------------------------------------------------------------------------------- |
+| `API_TOKEN`             | —                        | **Required**, at least 32 characters (`openssl rand -hex 32`).                    |
+| `API_TOKEN_FILE`        | —                        | Read the token from a file (Docker secrets). Use one or the other.                |
+| `JELLYFIN_URL`          | —                        | **Required**. Jellyfin as seen from the bridge, e.g. `http://jellyfin:8096`.      |
+| `JELLYFIN_USER_ID`      | —                        | **Required**. The user whose libraries, playlists and sessions are used.          |
+| `JELLYFIN_API_KEY`      | —                        | **Required**. Dashboard → API Keys.                                               |
+| `JELLYFIN_API_KEY_FILE` | —                        | Read the API key from a file. Use one or the other.                               |
+| `PLAYLIST_NAME`         | `Para ver hoy`           | The playlist that `PUT /playlist` replaces.                                       |
+| `LISTEN_ADDR`           | `127.0.0.1:8787`         | Use `0.0.0.0:8787` inside compose, with no `ports:` published.                    |
+| `LOG_LEVEL`             | `info`                   | `debug` also logs `/healthz` requests.                                            |
+| `UPDATE_TOKEN`          | —                        | Enables `POST /admin/update`. At least 32 characters, different from `API_TOKEN`. |
+| `UPDATE_TOKEN_FILE`     | —                        | Read it from a file. Use one or the other.                                        |
+| `WATCHTOWER_URL`        | `http://watchtower:8080` | Watchtower's HTTP API, on the internal network. Only with `UPDATE_TOKEN`.         |
+| `WATCHTOWER_TOKEN`      | —                        | Watchtower's `WATCHTOWER_HTTP_API_TOKEN`. Required with `UPDATE_TOKEN`.           |
+| `WATCHTOWER_TOKEN_FILE` | —                        | Read it from a file. Use one or the other.                                        |
 
 ## Endpoints
 
@@ -57,6 +62,14 @@ Ids are Jellyfin ids (32 hex characters). Errors are returned as `{"error": "...
 | POST   | `/sessions/{id}/play`               | `{"item_ids": [...1-200]}` → `204`. Plays now on that session                                              |
 | GET    | `/items/{id}/image`                 | → the item's primary image, at most 400 px tall                                                            |
 
+**Update webhook.** `POST /admin/update` exists only when `UPDATE_TOKEN` is set,
+and takes that token instead of `API_TOKEN`: the app's token can't call it, and
+this token can't call anything else. It takes no input. It asks Watchtower to
+check for new images of the containers labelled
+`com.centurylinklabs.watchtower.enable=true` and answers `202` once Watchtower
+has started, before it restarts the bridge. `409` means an update is already
+running, and `503` means Watchtower isn't reachable.
+
 ### Examples
 
 ```sh
@@ -74,7 +87,7 @@ curl "${AUTH[@]}" -X POST $B/sessions/<id>/play -d '{"item_ids": ["<id>"]}'
 ## Deployment at home
 
 `docker-compose.home.yml` at the repo root runs this bridge, with no
-published ports, plus `cloudflared`. Put these in `.env`, next to that file:
+published ports, plus `cloudflared` and Watchtower. Put these in `.env`, next to that file:
 
 ```env
 JELLYFIN_URL=http://host.docker.internal:8096
@@ -82,6 +95,8 @@ JELLYFIN_USER_ID=<user id>
 JELLYFIN_API_KEY=<API key>
 BRIDGE_API_TOKEN=<openssl rand -hex 32>
 CLOUDFLARE_TUNNEL_TOKEN=<tunnel token>
+BRIDGE_UPDATE_TOKEN=<openssl rand -hex 32>
+WATCHTOWER_TOKEN=<openssl rand -hex 32>
 ```
 
 `host.docker.internal` reaches a Jellyfin running on the host itself. If
@@ -108,6 +123,34 @@ reuse the same service token by adding it to this application's policy.
 On the VPS, the app needs `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN` (the
 bridge's `API_TOKEN`) and the two `CF_ACCESS_*` values.
 
+### Automatic updates
+
+```
+CI ──▶ Cloudflare Access ──tunnel──▶ jellyfin-bridge  POST /admin/update
+                                          │  (compose network)
+                                          ▼
+                                     watchtower :8080  ──▶ pulls from GHCR, restarts the bridge
+```
+
+On every push to `main` that touches `jellyfin-bridge/`, the
+`jellyfin-bridge.yml` workflow publishes the image, waits until `:latest`
+resolves to the new digest, and calls `POST /admin/update`. Watchtower runs
+[`nickfedor/watchtower`](https://github.com/nicholas-fedor/watchtower), the
+maintained fork, since `containrrr/watchtower` was archived in 2025. It is the
+only container with the Docker socket. It has no ports and no tunnel route, so
+only the bridge can reach it, and it only touches labelled containers. As a
+fallback, it also checks for new images once a day.
+
+The workflow needs these repository secrets. Without the first two, it skips
+the call:
+
+- `JELLYFIN_BRIDGE_URL`: the tunnel hostname.
+- `JELLYFIN_BRIDGE_UPDATE_TOKEN`: the same value as `BRIDGE_UPDATE_TOKEN` at home.
+- `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`: a service token allowed by
+  the Access application. A separate one for CI is best, so you can revoke it on its own.
+
+The image in GHCR must be public, or Watchtower needs registry credentials to pull it.
+
 ### Rotating the token
 
 1. Generate a new token.
@@ -132,5 +175,6 @@ Layout:
 - `cmd/jellyfin-bridge`: entry point and the `healthcheck` subcommand.
 - `internal/jellyfin`: the Jellyfin API client.
 - `internal/httpapi`: routes and validation.
+- `internal/watchtower`: triggers Watchtower updates.
 - `internal/auth`: bearer-token middleware.
 - `internal/config`: environment variables.

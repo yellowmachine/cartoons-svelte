@@ -18,6 +18,7 @@ import (
 	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/config"
 	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/httpapi"
 	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/jellyfin"
+	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/watchtower"
 )
 
 func main() {
@@ -46,9 +47,14 @@ func run() int {
 		PlaylistName: cfg.PlaylistName,
 	})
 
+	var updater httpapi.Updater
+	if cfg.UpdateToken != "" {
+		updater = watchtower.New(cfg.WatchtowerURL, cfg.WatchtowerToken)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.New(jf, log).Handler(cfg.Token),
+		Handler:           httpapi.New(jf, updater, log).Handler(cfg.Token, cfg.UpdateToken),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      45 * time.Second, // > the 30 s budget for a Jellyfin call
@@ -59,7 +65,7 @@ func run() int {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
-	log.Info("listening", "addr", cfg.ListenAddr, "jellyfin", cfg.JellyfinURL)
+	log.Info("listening", "addr", cfg.ListenAddr, "jellyfin", cfg.JellyfinURL, "update_webhook", updater != nil)
 
 	code := 0
 	select {

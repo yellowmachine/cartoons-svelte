@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/jellyfin"
+	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/watchtower"
 )
 
 const (
@@ -221,4 +222,25 @@ func (s *Server) image(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, img.Body)
+}
+
+// update asks Watchtower to pull a new image of the bridge (and anything else
+// it watches). It takes no input: the caller can only say "check now".
+func (s *Server) update(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	err := s.updater.TriggerUpdate(ctx)
+	switch {
+	case err == nil:
+		s.log.Info("update triggered")
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "update started"})
+	case errors.Is(err, watchtower.ErrBusy):
+		errorJSON(w, http.StatusConflict, "an update is already running")
+	case errors.Is(err, watchtower.ErrUnavailable):
+		s.log.Error("watchtower unavailable", "err", err)
+		errorJSON(w, http.StatusServiceUnavailable, "watchtower unavailable")
+	default:
+		s.log.Error("update failed", "err", err)
+		errorJSON(w, http.StatusBadGateway, "watchtower error")
+	}
 }

@@ -82,3 +82,30 @@ func TestJellyfinSettingsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateWebhook(t *testing.T) {
+	cfg, err := Load(env(valid()), noFile)
+	if err != nil || cfg.UpdateToken != "" {
+		t.Errorf("disabled by default: got %+v, %v", cfg, err)
+	}
+
+	m := valid()
+	m["UPDATE_TOKEN"] = strings.Repeat("u", 32)
+	if _, err := Load(env(m), noFile); err == nil || !strings.Contains(err.Error(), "WATCHTOWER_TOKEN") {
+		t.Errorf("missing watchtower token: got %v", err)
+	}
+	m["WATCHTOWER_TOKEN"] = "wt"
+	cfg, err = Load(env(m), noFile)
+	if err != nil || cfg.WatchtowerURL != "http://watchtower:8080" || cfg.WatchtowerToken != "wt" {
+		t.Errorf("got %+v, %v", cfg, err)
+	}
+
+	m["UPDATE_TOKEN"] = token
+	if _, err := Load(env(m), noFile); err == nil || !strings.Contains(err.Error(), "differ") {
+		t.Errorf("same token as API_TOKEN: got %v", err)
+	}
+	m["UPDATE_TOKEN"] = "short"
+	if _, err := Load(env(m), noFile); err == nil {
+		t.Error("short update token accepted")
+	}
+}

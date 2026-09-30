@@ -1,5 +1,6 @@
-# Stack de casa, junto a Jellyfin: jellyfin-bridge y cloudflared. El VPS llega
-# al bridge solo por el túnel de Cloudflare; Jellyfin no se expone a internet.
+# Stack de casa, junto a Jellyfin: jellyfin-bridge, cloudflared y watchtower.
+# El VPS llega al bridge solo por el túnel de Cloudflare; Jellyfin no se expone
+# a internet.
 #
 # Requerido en un .env junto a este fichero:
 #   JELLYFIN_URL=<Jellyfin visto desde el contenedor, p.ej. http://host.docker.internal:8096>
@@ -7,6 +8,8 @@
 #   JELLYFIN_API_KEY=<API key de Jellyfin>
 #   BRIDGE_API_TOKEN=<openssl rand -hex 32>   (mismo valor que JELLYFIN_BRIDGE_TOKEN en la app)
 #   CLOUDFLARE_TUNNEL_TOKEN=<de Zero Trust > Networks > Tunnels>
+#   BRIDGE_UPDATE_TOKEN=<openssl rand -hex 32>  (distinto; el secreto JELLYFIN_BRIDGE_UPDATE_TOKEN de GitHub)
+#   WATCHTOWER_TOKEN=<openssl rand -hex 32>     (solo lo usan el bridge y watchtower, en la red interna)
 #
 # Arranque: docker compose -f docker-compose.home.yml up -d
 
@@ -21,6 +24,13 @@ services:
       # Escucha en la red de compose para que cloudflared llegue; sin `ports`,
       # así que no es accesible desde el host ni desde la LAN.
       LISTEN_ADDR: 0.0.0.0:8787
+      # Webhook POST /admin/update que llama la CI tras publicar una imagen.
+      UPDATE_TOKEN: ${BRIDGE_UPDATE_TOKEN:?set BRIDGE_UPDATE_TOKEN in .env}
+      WATCHTOWER_URL: http://watchtower:8080
+      WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+    labels:
+      # Watchtower solo actualiza los contenedores con esta etiqueta.
+      - com.centurylinklabs.watchtower.enable=true
     # Si Jellyfin corre en el host (no en este compose).
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -39,4 +49,21 @@ services:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
     depends_on:
       - jellyfin-bridge
+    restart: unless-stopped
+
+  # Actualiza el bridge cuando éste se lo pide (webhook de la CI) y, por si
+  # alguno falla, una vez al día por su cuenta. Es el único con el socket de
+  # Docker, y no tiene puertos ni entrada en el túnel: solo lo ve el bridge.
+  # Es el fork mantenido de containrrr/watchtower (archivado en 2025).
+  watchtower:
+    image: nickfedor/watchtower:1
+    environment:
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+      WATCHTOWER_HTTP_API_PERIODIC_POLLS: 'true'
+      WATCHTOWER_POLL_INTERVAL: '86400'
+      WATCHTOWER_LABEL_ENABLE: 'true'
+      WATCHTOWER_CLEANUP: 'true'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

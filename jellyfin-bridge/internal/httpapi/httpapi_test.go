@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/jellyfin"
+	"github.com/yellowmachine/cartoons-svelte/jellyfin-bridge/internal/watchtower"
 )
 
 const (
@@ -72,19 +73,37 @@ func (f *fakeJellyfin) Image(ctx context.Context, id string) (*jellyfin.Image, e
 	return &jellyfin.Image{ContentType: "image/jpeg", Length: 3, Body: io.NopCloser(strings.NewReader("jpg"))}, nil
 }
 
+type fakeUpdater struct {
+	calls int
+	err   error
+}
+
+func (u *fakeUpdater) TriggerUpdate(ctx context.Context) error {
+	u.calls++
+	return u.err
+}
+
 func newHandler() (*fakeJellyfin, http.Handler) {
 	f := &fakeJellyfin{}
-	return f, New(f, nil).Handler(token)
+	return f, New(f, nil, nil).Handler(token, "")
 }
 
 func do(h http.Handler, method, path, body string, authed bool) *httptest.ResponseRecorder {
+	bearer := ""
+	if authed {
+		bearer = token
+	}
+	return doAs(h, method, path, body, bearer)
+}
+
+func doAs(h http.Handler, method, path, body, bearer string) *httptest.ResponseRecorder {
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, rd)
-	if authed {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -185,5 +204,40 @@ func TestErrorMapping(t *testing.T) {
 	f.err = jellyfin.ErrUnavailable
 	if rec := do(h, "GET", "/healthz", "", false); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"jellyfin":false`) {
 		t.Errorf("healthz while down: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestUpdateWebhook(t *testing.T) {
+	const updateToken = "update-token-0123456789abcdef012345"
+
+	_, disabled := newHandler()
+	if rec := doAs(disabled, "POST", "/admin/update", "", token); rec.Code != http.StatusNotFound {
+		t.Errorf("disabled: %d", rec.Code)
+	}
+
+	u := &fakeUpdater{}
+	h := New(&fakeJellyfin{}, u, nil).Handler(token, updateToken)
+	if rec := doAs(h, "POST", "/admin/update", "", token); rec.Code != http.StatusUnauthorized {
+		t.Errorf("app token: %d", rec.Code)
+	}
+	if rec := doAs(h, "GET", "/folders", "", updateToken); rec.Code != http.StatusUnauthorized {
+		t.Errorf("update token on the API: %d", rec.Code)
+	}
+	if rec := doAs(h, "POST", "/admin/update", "", updateToken); rec.Code != http.StatusAccepted || u.calls != 1 {
+		t.Errorf("update: %d, %d calls", rec.Code, u.calls)
+	}
+	if rec := doAs(h, "GET", "/folders", "", token); rec.Code != http.StatusOK {
+		t.Errorf("API still works: %d", rec.Code)
+	}
+
+	for err, want := range map[error]int{
+		watchtower.ErrBusy:        http.StatusConflict,
+		watchtower.ErrUnavailable: http.StatusServiceUnavailable,
+		errors.New("boom"):        http.StatusBadGateway,
+	} {
+		u.err = err
+		if rec := doAs(h, "POST", "/admin/update", "", updateToken); rec.Code != want {
+			t.Errorf("%v: got %d, want %d", err, rec.Code, want)
+		}
 	}
 }
