@@ -1,6 +1,6 @@
 // Asistente por voz: transcribe lo que se ha dicho (OpenAI) y le pide a Claude
-// que lo traduzca a una selección de carpetas y un modo, el mismo input que
-// usan los botones de la página.
+// que lo traduzca a bloques ordenados (carpetas, modo y cuántos items), cada
+// uno resuelto con los mismos pickers que usan los botones de la página.
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
 import type { FolderOption } from '$lib/types';
@@ -47,34 +47,52 @@ export async function transcribe(
 	return text.trim();
 }
 
-export type AssistantChoice = {
+export type AssistantSegment = {
 	folderIds: string[];
 	mode: 'random' | 'continue';
+	count: number;
 	excludeWatched: boolean;
 };
 
+const MAX_PER_SEGMENT = 10;
+const MAX_TOTAL = 20;
+
 const SYSTEM_PROMPT = `Ayudas a preparar la sesión de dibujos animados de hoy en un Jellyfin doméstico.
 Recibes la lista de carpetas (cada una es una serie o colección) y lo que ha pedido el usuario por voz, transcrito (puede tener errores de transcripción).
-Elige las carpetas que corresponden a lo que pide. Una petición genérica ("clásicos de Disney", "algo de los 80") puede corresponder a varias carpetas: elige todas las que encajen.
-Usa solo ids de la lista. Si nada encaja, devuelve folder_ids vacío.
-mode: "continue" solo si pide seguir por donde iba con una única serie ("sigue con...", "el siguiente de..."); si no, "random".
-exclude_watched: true salvo que pida explícitamente incluir los ya vistos o repetir.`;
+Divide la petición en bloques, en el orden en que se piden ("dos de X y luego tres de Y" son dos bloques: primero X, después Y). Una petición sin partes es un solo bloque.
+Para cada bloque:
+- folder_ids: las carpetas que corresponden. Una petición genérica ("clásicos de Disney", "algo de los 80") puede corresponder a varias carpetas: elige todas las que encajen. Usa solo ids de la lista.
+- mode: "continue" si pide seguir por donde iba o episodios seguidos/en orden de una única serie ("sigue con...", "el siguiente de...", "dos episodios seguidos de..."); si no, "random".
+- count: cuántos items pide en ese bloque. Si no lo dice: 10 si hay un solo bloque, 2 si hay varios. Máximo ${MAX_PER_SEGMENT}.
+- exclude_watched: true salvo que pida explícitamente incluir los ya vistos o repetir.
+Si nada encaja, devuelve segments vacío.`;
 
 const OUTPUT_SCHEMA = {
 	type: 'object',
 	properties: {
-		folder_ids: { type: 'array', items: { type: 'string' } },
-		mode: { type: 'string', enum: ['random', 'continue'] },
-		exclude_watched: { type: 'boolean' }
+		segments: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					folder_ids: { type: 'array', items: { type: 'string' } },
+					mode: { type: 'string', enum: ['random', 'continue'] },
+					count: { type: 'integer' },
+					exclude_watched: { type: 'boolean' }
+				},
+				required: ['folder_ids', 'mode', 'count', 'exclude_watched'],
+				additionalProperties: false
+			}
+		}
 	},
-	required: ['folder_ids', 'mode', 'exclude_watched'],
+	required: ['segments'],
 	additionalProperties: false
 };
 
-export async function chooseFolders(
+export async function chooseSegments(
 	request: string,
 	folders: FolderOption[]
-): Promise<AssistantChoice> {
+): Promise<AssistantSegment[]> {
 	if (!env.ANTHROPIC_API_KEY) throw new Error('Falta ANTHROPIC_API_KEY');
 	const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -98,16 +116,32 @@ export async function chooseFolders(
 	if (!text) throw new Error('El asistente no ha devuelto nada');
 
 	const parsed = JSON.parse(text) as {
-		folder_ids: string[];
-		mode: 'random' | 'continue';
-		exclude_watched: boolean;
+		segments: {
+			folder_ids: string[];
+			mode: 'random' | 'continue';
+			count: number;
+			exclude_watched: boolean;
+		}[];
 	};
-	// Nunca un id que no sea de la lista, por si acaso.
+	// Nunca un id que no sea de la lista, por si acaso, y cantidades acotadas.
 	const known = new Set(folders.map((f) => f.id));
-	const folderIds = [...new Set(parsed.folder_ids)].filter((id) => known.has(id));
-	return {
-		folderIds,
-		mode: parsed.mode === 'continue' && folderIds.length === 1 ? 'continue' : 'random',
-		excludeWatched: parsed.exclude_watched
-	};
+	const segments: AssistantSegment[] = [];
+	let total = 0;
+	for (const s of parsed.segments) {
+		const folderIds = [...new Set(s.folder_ids)].filter((id) => known.has(id));
+		const count = Math.min(
+			Math.max(Math.round(s.count) || 1, 1),
+			MAX_PER_SEGMENT,
+			MAX_TOTAL - total
+		);
+		if (folderIds.length === 0 || count <= 0) continue;
+		total += count;
+		segments.push({
+			folderIds,
+			mode: s.mode === 'continue' && folderIds.length === 1 ? 'continue' : 'random',
+			count,
+			excludeWatched: s.exclude_watched
+		});
+	}
+	return segments;
 }

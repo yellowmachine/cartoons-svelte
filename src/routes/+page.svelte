@@ -166,6 +166,11 @@
 			if (result.folderIds.length === 0) {
 				throw new Error('No he encontrado ninguna carpeta que encaje');
 			}
+			if (result.items.length === 0) {
+				throw new Error(result.warnings[0] ?? 'No he encontrado nada que ver');
+			}
+			// Si algún bloque se ha quedado vacío, se avisa pero se enseña el resto.
+			if (result.warnings.length > 0) generateError = result.warnings.join('. ');
 			selected.clear();
 			for (const id of result.folderIds) selected.add(id);
 			excludeWatched = result.excludeWatched;
