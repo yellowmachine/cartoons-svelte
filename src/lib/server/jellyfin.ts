@@ -8,6 +8,11 @@ type JfItem = {
 	Id: string;
 	Name: string;
 	SeriesName?: string;
+	SortName?: string;
+	/** Número de temporada (en episodios). */
+	ParentIndexNumber?: number;
+	/** Número de episodio dentro de la temporada. */
+	IndexNumber?: number;
 	ImageTags?: Record<string, string>;
 };
 
@@ -75,10 +80,10 @@ export async function listFolders(): Promise<FolderOption[]> {
 	}));
 }
 
-async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
+async function itemsForFolder(folderId: string, excludeWatched: boolean): Promise<JfItem[]> {
 	if (folderId.startsWith('multi:')) {
 		const ids: string[] = JSON.parse(decodeURIComponent(folderId.slice('multi:'.length)));
-		const pools = await Promise.all(ids.map(unwatchedItemsForFolder));
+		const pools = await Promise.all(ids.map((id) => itemsForFolder(id, excludeWatched)));
 		return pools.flat();
 	}
 
@@ -87,8 +92,8 @@ async function unwatchedItemsForFolder(folderId: string): Promise<JfItem[]> {
 		ParentId: folderId,
 		Recursive: 'true',
 		IncludeItemTypes: ITEM_TYPES,
-		Filters: 'IsUnplayed',
-		Fields: 'SeriesName,ImageTags'
+		...(excludeWatched ? { Filters: 'IsUnplayed' } : {}),
+		Fields: 'SeriesName,SortName,ImageTags'
 	});
 	return Items;
 }
@@ -123,12 +128,13 @@ function toPlaylistItem(item: JfItem): PlaylistItem {
 
 export async function pickCandidateItems(
 	folderIds: string[],
+	excludeWatched = true,
 	count = 10,
 	maxPerFolder = 2
 ): Promise<PlaylistItem[]> {
 	// Como mucho `maxPerFolder` items por carpeta, aunque el total no llegue a `count`
 	// — si no, una carpeta con muchísimo contenido se comería todo el resultado.
-	const pools = await Promise.all(folderIds.map(unwatchedItemsForFolder));
+	const pools = await Promise.all(folderIds.map((id) => itemsForFolder(id, excludeWatched)));
 	const seenIds = new Set<string>();
 	const capped: JfItem[] = [];
 	for (const pool of pools) {
@@ -144,7 +150,33 @@ export async function pickCandidateItems(
 
 	const chosen = shuffle(capped).slice(0, count);
 	if (chosen.length === 0) {
-		throw new Error('No se encontraron items sin ver en las carpetas seleccionadas');
+		throw new Error(
+			excludeWatched
+				? 'No se encontraron items sin ver en las carpetas seleccionadas'
+				: 'No se encontraron items en las carpetas seleccionadas'
+		);
+	}
+	return chosen.map(toPlaylistItem);
+}
+
+/** Temporada, episodio y nombre; lo que no tenga numeración va al final. */
+function compareEpisodeOrder(a: JfItem, b: JfItem): number {
+	const season = (a.ParentIndexNumber ?? Infinity) - (b.ParentIndexNumber ?? Infinity);
+	if (season) return season;
+	const episode = (a.IndexNumber ?? Infinity) - (b.IndexNumber ?? Infinity);
+	if (episode) return episode;
+	return (a.SortName ?? a.Name).localeCompare(b.SortName ?? b.Name, undefined, { numeric: true });
+}
+
+/**
+ * Los siguientes `count` items sin ver de una carpeta, en orden. Se ordena aquí
+ * y no en Jellyfin porque las carpetas "multi:" juntan varias bibliotecas.
+ */
+export async function nextItemsInFolder(folderId: string, count = 10): Promise<PlaylistItem[]> {
+	const pool = await itemsForFolder(folderId, true);
+	const chosen = pool.sort(compareEpisodeOrder).slice(0, count);
+	if (chosen.length === 0) {
+		throw new Error('No quedan items sin ver en esa carpeta');
 	}
 	return chosen.map(toPlaylistItem);
 }

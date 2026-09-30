@@ -4,6 +4,7 @@
 	import type { ClientSession, FolderOption, PlaylistItem } from '$lib/types';
 
 	const SELECTED_FOLDERS_KEY = 'cartoons:selectedFolders';
+	const EXCLUDE_WATCHED_KEY = 'cartoons:excludeWatched';
 
 	function loadStoredSelection(): string[] {
 		if (!browser) return [];
@@ -12,6 +13,15 @@
 			return raw ? JSON.parse(raw) : [];
 		} catch {
 			return [];
+		}
+	}
+
+	function loadStoredExcludeWatched(): boolean {
+		if (!browser) return true;
+		try {
+			return localStorage.getItem(EXCLUDE_WATCHED_KEY) !== 'false';
+		} catch {
+			return true;
 		}
 	}
 
@@ -29,7 +39,19 @@
 			// localStorage puede no estar disponible (modo privado, cuota llena…); no es crítico.
 		}
 	});
-	let generating = $state(false);
+
+	let excludeWatched = $state(loadStoredExcludeWatched());
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.setItem(EXCLUDE_WATCHED_KEY, String(excludeWatched));
+		} catch {
+			// Igual que con las carpetas: si no se puede guardar, no pasa nada.
+		}
+	});
+
+	let generating = $state<'random' | 'continue' | null>(null);
 	let generateError = $state<string | null>(null);
 
 	let items = $state<PlaylistItem[]>([]);
@@ -58,8 +80,8 @@
 		else excluded.add(id);
 	}
 
-	async function generate() {
-		generating = true;
+	async function generate(mode: 'random' | 'continue') {
+		generating = mode;
 		generateError = null;
 		confirmed = false;
 		confirmError = null;
@@ -69,7 +91,7 @@
 			const res = await fetch('/api/generate', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ folderIds: [...selected] })
+				body: JSON.stringify({ folderIds: [...selected], excludeWatched, mode })
 			});
 			if (!res.ok) {
 				const body = await res.json().catch(() => null);
@@ -82,7 +104,7 @@
 		} catch (err) {
 			generateError = err instanceof Error ? err.message : 'Algo fue mal';
 		} finally {
-			generating = false;
+			generating = null;
 		}
 	}
 
@@ -147,7 +169,18 @@
 	class="from-toon-sky via-toon-sky to-toon-grass min-h-screen bg-gradient-to-b px-4 py-10 sm:px-8"
 >
 	<div class="mx-auto max-w-3xl">
-		<header class="mb-8 text-center">
+		<header class="relative mb-8 text-center">
+			{#if data.authEnabled}
+				<form method="POST" action="/logout" class="absolute top-0 right-0">
+					<button
+						type="submit"
+						class="rounded-full bg-white/20 px-4 py-2 text-sm font-semibold text-white backdrop-blur
+							transition hover:bg-white/30"
+					>
+						🚪 Salir
+					</button>
+				</form>
+			{/if}
 			<h1
 				class="text-5xl font-bold text-white drop-shadow-[0_3px_0_rgba(43,33,64,0.35)] sm:text-6xl"
 			>
@@ -167,7 +200,19 @@
 			</div>
 		{:else}
 			<section class="bg-toon-bubble rounded-3xl p-6 shadow-xl sm:p-8">
-				<h2 class="text-toon-ink mb-4 text-2xl font-semibold">🗂️ Carpetas</h2>
+				<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+					<h2 class="text-toon-ink text-2xl font-semibold">🗂️ Carpetas</h2>
+					<label
+						class="text-toon-ink flex cursor-pointer items-center gap-2 font-semibold select-none"
+					>
+						<input
+							type="checkbox"
+							bind:checked={excludeWatched}
+							class="accent-toon-grape h-5 w-5 cursor-pointer"
+						/>
+						Excluir los ya vistos
+					</label>
+				</div>
 
 				{#if folders.length === 0}
 					<p class="text-toon-ink/70">No se han encontrado carpetas en tu Jellyfin.</p>
@@ -193,17 +238,36 @@
 						{/each}
 					</div>
 
-					<button
-						type="button"
-						disabled={selected.size === 0 || generating}
-						onclick={generate}
-						class="bg-toon-sun text-toon-ink mt-6 w-full rounded-full px-6 py-4 text-xl font-bold
-							shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
-							hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
-							disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						{generating ? '🎲 Buscando…' : '🎲 10 al azar'}
-					</button>
+					<div class="mt-6 flex flex-col gap-3 sm:flex-row">
+						<button
+							type="button"
+							disabled={selected.size === 0 || generating !== null}
+							onclick={() => generate('random')}
+							class="bg-toon-sun text-toon-ink w-full rounded-full px-6 py-4 text-xl font-bold
+								shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+								hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+								disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{generating === 'random' ? '🎲 Buscando…' : '🎲 10 al azar'}
+						</button>
+						<button
+							type="button"
+							disabled={selected.size !== 1 || generating !== null}
+							onclick={() => generate('continue')}
+							class="bg-toon-coral w-full rounded-full px-6 py-4 text-xl font-bold text-white
+								shadow-[0_5px_0_rgba(43,33,64,0.25)] transition
+								hover:brightness-105 active:translate-y-0.5 active:shadow-[0_2px_0_rgba(43,33,64,0.25)]
+								disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{generating === 'continue' ? '▶️ Buscando…' : '▶️ Continuar'}
+						</button>
+					</div>
+
+					{#if selected.size > 1}
+						<p class="text-toon-ink/60 mt-2 text-center text-sm">
+							Marca solo una carpeta para continuar
+						</p>
+					{/if}
 
 					{#if generateError}
 						<p class="text-toon-coral mt-3 text-center font-medium">{generateError}</p>
@@ -216,7 +280,11 @@
 					<h2 class="text-toon-ink mb-4 text-2xl font-semibold">✨ Para ver hoy</h2>
 
 					{#if items.length === 0}
-						<p class="text-toon-ink/70">No había nada sin ver en esas carpetas.</p>
+						<p class="text-toon-ink/70">
+							{excludeWatched
+								? 'No había nada sin ver en esas carpetas.'
+								: 'No había nada en esas carpetas.'}
+						</p>
 					{:else}
 						<p class="text-toon-ink/70 mb-4 text-sm">
 							Desmarca lo que no te apetezca ver hoy antes de crear la lista.
