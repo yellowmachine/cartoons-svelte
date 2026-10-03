@@ -92,7 +92,8 @@ imagen, solo reiniciando el contenedor.
 
 ### En casa
 
-`docker-compose.home.yml` levanta el bridge (sin puertos publicados) y `cloudflared`. Los pasos
+`docker-compose.home.yml` levanta el bridge (publicado en el puerto 8787 de la LAN) y Watchtower.
+El túnel de Cloudflare se gestiona aparte y apunta a `http://<ip de la máquina>:8787`. Los pasos
 para crear el túnel, el service token y la aplicación de Cloudflare Access están en
 [`jellyfin-bridge/README.md`](jellyfin-bridge/README.md#cloudflare-setup).
 
