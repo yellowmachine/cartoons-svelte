@@ -1,59 +1,91 @@
+// Acceso a Jellyfin a través de jellyfin-bridge, el servicio que corre en casa
+// junto a Jellyfin (ver jellyfin-bridge/README.md). La app nunca ve la API key
+// de Jellyfin: solo el token del bridge.
 import { env } from '$env/dynamic/private';
 import type { ClientSession, FolderOption, PlaylistItem } from '$lib/types';
 
-const PLAYLIST_NAME = 'Para ver hoy';
-const ITEM_TYPES = 'Movie,Episode,Video';
+const TIMEOUT_MS = 30_000;
 
-type JfItem = {
-	Id: string;
-	Name: string;
-	SeriesName?: string;
-	SortName?: string;
+/** Un item tal y como lo devuelve el bridge (`GET /folders/{id}/items`). */
+type BridgeItem = {
+	id: string;
+	name: string;
+	series_name?: string;
+	sort_name?: string;
 	/** Número de temporada (en episodios). */
-	ParentIndexNumber?: number;
+	season?: number;
 	/** Número de episodio dentro de la temporada. */
-	IndexNumber?: number;
-	ImageTags?: Record<string, string>;
+	episode?: number;
+	has_image: boolean;
 };
 
-function config() {
-	const url = env.JELLYFIN_URL;
-	const userId = env.JELLYFIN_USER_ID;
-	const apiKey = env.JELLYFIN_API_KEY;
-	if (!url || !userId || !apiKey) {
+function baseUrl(): string {
+	const url = env.JELLYFIN_BRIDGE_URL;
+	if (!url || !env.JELLYFIN_BRIDGE_TOKEN) {
 		throw new Error(
-			'Faltan variables de entorno de Jellyfin: JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_API_KEY'
+			'Faltan variables de entorno del bridge: JELLYFIN_BRIDGE_URL, JELLYFIN_BRIDGE_TOKEN'
 		);
 	}
-	return { url: url.replace(/\/+$/, ''), userId, apiKey };
+	return url.replace(/\/+$/, '');
 }
 
-async function jf<T>(
-	path: string,
-	params: Record<string, string> = {},
-	init: RequestInit = {}
-): Promise<T> {
-	const { url, apiKey } = config();
-	const target = new URL(url + path);
-	for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value);
-
-	const res = await fetch(target, {
-		...init,
-		headers: {
-			'X-Emby-Token': apiKey,
-			'Content-Type': 'application/json',
-			...init.headers
-		}
-	});
-
-	if (!res.ok) {
-		const body = await res.text().catch(() => '');
-		throw new Error(`Jellyfin ${path} respondió ${res.status}: ${body}`);
+function authHeaders(): Record<string, string> {
+	const headers: Record<string, string> = {
+		Authorization: `Bearer ${env.JELLYFIN_BRIDGE_TOKEN}`
+	};
+	// Service token de Cloudflare Access, cuando el bridge está detrás de un túnel.
+	if (env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET) {
+		headers['CF-Access-Client-Id'] = env.CF_ACCESS_CLIENT_ID;
+		headers['CF-Access-Client-Secret'] = env.CF_ACCESS_CLIENT_SECRET;
 	}
-	if (res.status === 204) return undefined as T;
-	const text = await res.text();
-	return (text ? JSON.parse(text) : undefined) as T;
+	return headers;
 }
+
+/** Hace la petición al bridge y lanza un Error legible si no sale bien. */
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
+	const headers = authHeaders();
+	if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+	let res: Response;
+	try {
+		res = await fetch(baseUrl() + path, {
+			method,
+			headers,
+			body: body === undefined ? undefined : JSON.stringify(body),
+			signal: AbortSignal.timeout(TIMEOUT_MS),
+			// Cloudflare Access responde a un service token rechazado con una
+			// redirección a su login; seguirla escondería el fallo.
+			redirect: 'manual'
+		});
+	} catch (err) {
+		console.error(`[bridge] ${method} ${path} falló:`, err);
+		throw new Error('No se puede contactar con jellyfin-bridge', { cause: err });
+	}
+
+	if (res.ok) return res;
+
+	if (res.status >= 300 && res.status < 400) {
+		console.error(`[bridge] ${method} ${path}: redirección (¿Cloudflare Access rechaza el token?)`);
+		throw new Error('Cloudflare Access rechazó la petición al bridge');
+	}
+	if (res.status === 401) {
+		console.error('[bridge] 401: JELLYFIN_BRIDGE_TOKEN no coincide con el API_TOKEN del bridge');
+	}
+	let message = res.statusText;
+	try {
+		message = ((await res.json()) as { error?: string }).error ?? message;
+	} catch {
+		// no es JSON (p.ej. una página de error del túnel)
+	}
+	throw new Error(`jellyfin-bridge ${method} ${path} respondió ${res.status}: ${message}`);
+}
+
+async function bridge<T>(method: string, path: string, body?: unknown): Promise<T> {
+	const res = await send(method, path, body);
+	return (res.status === 204 ? undefined : await res.json()) as T;
+}
+
+const seg = encodeURIComponent;
 
 /**
  * En este Jellyfin cada biblioteca (View) es directamente una serie/colección
@@ -61,17 +93,16 @@ async function jf<T>(
  * que la carpeta a elegir es la propia View, sin bajar a mirar su contenido.
  */
 export async function listFolders(): Promise<FolderOption[]> {
-	const { userId } = config();
-	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Views`);
+	const views = await bridge<{ id: string; name: string }[]>('GET', '/folders');
 
 	// Un único checkbox por nombre: si dos bibliotecas comparten nombre (p.ej.
 	// añadida por error dos veces), se fusionan en un id "multi:" que al
 	// seleccionarlo consulta items sin ver en todas ellas.
 	const byName = new Map<string, string[]>();
-	for (const view of Items) {
-		const ids = byName.get(view.Name) ?? [];
-		ids.push(view.Id);
-		byName.set(view.Name, ids);
+	for (const view of views) {
+		const ids = byName.get(view.name) ?? [];
+		ids.push(view.id);
+		byName.set(view.name, ids);
 	}
 
 	return [...byName.entries()].map(([name, ids]) => ({
@@ -80,22 +111,14 @@ export async function listFolders(): Promise<FolderOption[]> {
 	}));
 }
 
-async function itemsForFolder(folderId: string, excludeWatched: boolean): Promise<JfItem[]> {
+async function itemsForFolder(folderId: string, excludeWatched: boolean): Promise<BridgeItem[]> {
 	if (folderId.startsWith('multi:')) {
 		const ids: string[] = JSON.parse(decodeURIComponent(folderId.slice('multi:'.length)));
 		const pools = await Promise.all(ids.map((id) => itemsForFolder(id, excludeWatched)));
 		return pools.flat();
 	}
 
-	const { userId } = config();
-	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-		ParentId: folderId,
-		Recursive: 'true',
-		IncludeItemTypes: ITEM_TYPES,
-		...(excludeWatched ? { Filters: 'IsUnplayed' } : {}),
-		Fields: 'SeriesName,SortName,ImageTags'
-	});
-	return Items;
+	return bridge<BridgeItem[]>('GET', `/folders/${seg(folderId)}/items?unplayed=${excludeWatched}`);
 }
 
 function shuffle<T>(items: T[]): T[] {
@@ -107,22 +130,12 @@ function shuffle<T>(items: T[]): T[] {
 	return copy;
 }
 
-async function findExistingPlaylistId(): Promise<string | undefined> {
-	const { userId } = config();
-	const { Items } = await jf<{ Items: JfItem[] }>(`/Users/${userId}/Items`, {
-		IncludeItemTypes: 'Playlist',
-		Recursive: 'true',
-		SearchTerm: PLAYLIST_NAME
-	});
-	return Items.find((item) => item.Name === PLAYLIST_NAME)?.Id;
-}
-
-function toPlaylistItem(item: JfItem): PlaylistItem {
+function toPlaylistItem(item: BridgeItem): PlaylistItem {
 	return {
-		id: item.Id,
-		name: item.Name,
-		seriesName: item.SeriesName,
-		hasImage: Boolean(item.ImageTags?.Primary)
+		id: item.id,
+		name: item.name,
+		seriesName: item.series_name,
+		hasImage: item.has_image
 	};
 }
 
@@ -136,13 +149,13 @@ export async function pickCandidateItems(
 	// — si no, una carpeta con muchísimo contenido se comería todo el resultado.
 	const pools = await Promise.all(folderIds.map((id) => itemsForFolder(id, excludeWatched)));
 	const seenIds = new Set<string>();
-	const capped: JfItem[] = [];
+	const capped: BridgeItem[] = [];
 	for (const pool of pools) {
 		let taken = 0;
 		for (const item of shuffle(pool)) {
 			if (taken >= maxPerFolder) break;
-			if (seenIds.has(item.Id)) continue;
-			seenIds.add(item.Id);
+			if (seenIds.has(item.id)) continue;
+			seenIds.add(item.id);
 			capped.push(item);
 			taken++;
 		}
@@ -160,12 +173,14 @@ export async function pickCandidateItems(
 }
 
 /** Temporada, episodio y nombre; lo que no tenga numeración va al final. */
-function compareEpisodeOrder(a: JfItem, b: JfItem): number {
-	const season = (a.ParentIndexNumber ?? Infinity) - (b.ParentIndexNumber ?? Infinity);
+function compareEpisodeOrder(a: BridgeItem, b: BridgeItem): number {
+	const season = (a.season ?? Infinity) - (b.season ?? Infinity);
 	if (season) return season;
-	const episode = (a.IndexNumber ?? Infinity) - (b.IndexNumber ?? Infinity);
+	const episode = (a.episode ?? Infinity) - (b.episode ?? Infinity);
 	if (episode) return episode;
-	return (a.SortName ?? a.Name).localeCompare(b.SortName ?? b.Name, undefined, { numeric: true });
+	return (a.sort_name ?? a.name).localeCompare(b.sort_name ?? b.name, undefined, {
+		numeric: true
+	});
 }
 
 /**
@@ -181,54 +196,28 @@ export async function nextItemsInFolder(folderId: string, count = 10): Promise<P
 	return chosen.map(toPlaylistItem);
 }
 
+/** Borra la playlist "Para ver hoy" si existe y crea una nueva con `itemIds`. */
 export async function createTodayPlaylist(itemIds: string[]): Promise<{ playlistId: string }> {
-	const { userId } = config();
 	if (itemIds.length === 0) {
 		throw new Error('No hay items seleccionados para la playlist');
 	}
-
-	const existingId = await findExistingPlaylistId();
-	if (existingId) {
-		await jf(`/Items/${existingId}`, {}, { method: 'DELETE' });
-	}
-
-	const created = await jf<{ Id: string }>(
-		'/Playlists',
-		{},
-		{
-			method: 'POST',
-			body: JSON.stringify({
-				Name: PLAYLIST_NAME,
-				Ids: itemIds,
-				UserId: userId,
-				MediaType: 'Video'
-			})
-		}
-	);
-
-	return { playlistId: created.Id };
+	const { id } = await bridge<{ id: string }>('PUT', '/playlist', { item_ids: itemIds });
+	return { playlistId: id };
 }
 
 export async function listSessions(): Promise<ClientSession[]> {
-	const { userId } = config();
-	const sessions = await jf<
-		{ Id: string; DeviceName: string; Client: string; SupportsRemoteControl: boolean }[]
-	>('/Sessions', { ControllableByUserId: userId });
-
-	return sessions
-		.filter((s) => s.SupportsRemoteControl)
-		.map((s) => ({ id: s.Id, deviceName: s.DeviceName, client: s.Client }));
+	const sessions = await bridge<{ id: string; device_name: string; client: string }[]>(
+		'GET',
+		'/sessions'
+	);
+	return sessions.map((s) => ({ id: s.id, deviceName: s.device_name, client: s.client }));
 }
 
 export async function playOnSession(sessionId: string, itemIds: string[]): Promise<void> {
-	await jf(
-		`/Sessions/${sessionId}/Playing`,
-		{ PlayCommand: 'PlayNow', ItemIds: itemIds.join(',') },
-		{ method: 'POST' }
-	);
+	await bridge('POST', `/sessions/${seg(sessionId)}/play`, { item_ids: itemIds });
 }
 
-export async function imageUrl(itemId: string): Promise<string> {
-	const { url, apiKey } = config();
-	return `${url}/Items/${itemId}/Images/Primary?maxHeight=400&quality=90&api_key=${apiKey}`;
+/** La imagen principal de un item, tal cual la sirve el bridge. */
+export async function fetchImage(itemId: string): Promise<Response> {
+	return send('GET', `/items/${seg(itemId)}/image`);
 }

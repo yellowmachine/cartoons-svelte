@@ -1,11 +1,10 @@
 import { error } from '@sveltejs/kit';
-import { imageUrl } from '$lib/server/jellyfin';
+import { fetchImage } from '$lib/server/jellyfin';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ params, fetch }) => {
-	const src = await imageUrl(params.id);
-	const res = await fetch(src);
-	if (!res.ok) error(404, 'Imagen no encontrada');
+export const GET: RequestHandler = async ({ params }) => {
+	const res = await fetchImage(params.id).catch(() => null);
+	if (!res) error(404, 'Imagen no encontrada');
 
 	return new Response(res.body, {
 		headers: {

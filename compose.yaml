@@ -1,3 +1,6 @@
+# Solo para desarrollo local: la app y el bridge en la misma máquina, leyendo
+# ambos de .env. En producción la app va en Dokploy (VPS) y el bridge en casa
+# con docker-compose.home.yml.
 services:
   cartoons:
     build: .
@@ -6,3 +9,21 @@ services:
       - '3000:3000'
     env_file:
       - .env
+    environment:
+      JELLYFIN_BRIDGE_URL: http://jellyfin-bridge:8787
+    depends_on:
+      - jellyfin-bridge
+
+  jellyfin-bridge:
+    build: ./jellyfin-bridge
+    image: jellyfin-bridge
+    environment:
+      JELLYFIN_URL: ${JELLYFIN_URL:?set JELLYFIN_URL in .env}
+      JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:?set JELLYFIN_USER_ID in .env}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?set JELLYFIN_API_KEY in .env}
+      API_TOKEN: ${JELLYFIN_BRIDGE_TOKEN:?set JELLYFIN_BRIDGE_TOKEN in .env}
+      LISTEN_ADDR: 0.0.0.0:8787
+    # Para llegar a un Jellyfin que corre en el propio host:
+    # JELLYFIN_URL=http://host.docker.internal:8096
+    extra_hosts:
+      - host.docker.internal:host-gateway

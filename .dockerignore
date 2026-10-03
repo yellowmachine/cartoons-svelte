@@ -5,3 +5,5 @@ build
 .env
 .env.*
 !.env.example
+jellyfin-bridge
+docker-compose.home.yml

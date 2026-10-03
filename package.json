@@ -16,6 +16,7 @@
 		"pwa:icons": "pwa-assets-generator"
 	},
 	"devDependencies": {
+		"@anthropic-ai/sdk": "^0.129.0",
 		"@eslint/compat": "^2.1.1",
 		"@eslint/js": "^10.0.1",
 		"@sveltejs/kit": "^2.63.0",
