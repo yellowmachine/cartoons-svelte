@@ -7,3 +7,4 @@ build
 !.env.example
 jellyfin-bridge
 docker-compose.home.yml
+docker-compose.vps.yml
