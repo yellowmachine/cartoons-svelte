@@ -1,0 +1,69 @@
+# Stack de casa, junto a Jellyfin: jellyfin-bridge, cloudflared y watchtower.
+# El VPS llega al bridge solo por el túnel de Cloudflare; Jellyfin no se expone
+# a internet.
+#
+# Requerido en un .env junto a este fichero:
+#   JELLYFIN_URL=<Jellyfin visto desde el contenedor, p.ej. http://host.docker.internal:8096>
+#   JELLYFIN_USER_ID=<id del usuario>
+#   JELLYFIN_API_KEY=<API key de Jellyfin>
+#   BRIDGE_API_TOKEN=<openssl rand -hex 32>   (mismo valor que JELLYFIN_BRIDGE_TOKEN en la app)
+#   CLOUDFLARE_TUNNEL_TOKEN=<de Zero Trust > Networks > Tunnels>
+#   BRIDGE_UPDATE_TOKEN=<openssl rand -hex 32>  (distinto; el secreto JELLYFIN_BRIDGE_UPDATE_TOKEN de GitHub)
+#   WATCHTOWER_TOKEN=<openssl rand -hex 32>     (solo lo usan el bridge y watchtower, en la red interna)
+#
+# Arranque: docker compose -f docker-compose.home.yml up -d
+
+services:
+  jellyfin-bridge:
+    image: ghcr.io/yellowmachine/cartoons-svelte-jellyfin-bridge:latest
+    environment:
+      JELLYFIN_URL: ${JELLYFIN_URL:?set JELLYFIN_URL in .env}
+      JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:?set JELLYFIN_USER_ID in .env}
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?set JELLYFIN_API_KEY in .env}
+      API_TOKEN: ${BRIDGE_API_TOKEN:?set BRIDGE_API_TOKEN in .env}
+      # Escucha en la red de compose para que cloudflared llegue; sin `ports`,
+      # así que no es accesible desde el host ni desde la LAN.
+      LISTEN_ADDR: 0.0.0.0:8787
+      # Webhook POST /admin/update que llama la CI tras publicar una imagen.
+      UPDATE_TOKEN: ${BRIDGE_UPDATE_TOKEN:?set BRIDGE_UPDATE_TOKEN in .env}
+      WATCHTOWER_URL: http://watchtower:8080
+      WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+    labels:
+      # Watchtower solo actualiza los contenedores con esta etiqueta.
+      - com.centurylinklabs.watchtower.enable=true
+    # Si Jellyfin corre en el host (no en este compose).
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # El hostname público del túnel apunta a http://jellyfin-bridge:8787 (se
+    # configura en el panel de Cloudflare) y está protegido por una
+    # aplicación de Cloudflare Access con un Service Token.
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - jellyfin-bridge
+    restart: unless-stopped
+
+  # Actualiza el bridge cuando éste se lo pide (webhook de la CI) y, por si
+  # alguno falla, una vez al día por su cuenta. Es el único con el socket de
+  # Docker, y no tiene puertos ni entrada en el túnel: solo lo ve el bridge.
+  # Es el fork mantenido de containrrr/watchtower (archivado en 2025).
+  watchtower:
+    image: nickfedor/watchtower:1
+    environment:
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN in .env}
+      WATCHTOWER_HTTP_API_PERIODIC_POLLS: 'true'
+      WATCHTOWER_POLL_INTERVAL: '86400'
+      WATCHTOWER_LABEL_ENABLE: 'true'
+      WATCHTOWER_CLEANUP: 'true'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
