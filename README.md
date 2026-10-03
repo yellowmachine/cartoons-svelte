@@ -50,9 +50,19 @@ Variables de la app:
 - `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`: service token de Cloudflare Access que
   protege el bridge.
 - `ORIGIN`: URL pública donde sirves la app (SvelteKit la necesita en producción).
-- `ADMIN_PASSWORD`: si la defines, la app pide esta contraseña antes de dejar entrar (una cookie
-  de 10 años recuerda la sesión). Recomendado si el dominio es accesible desde internet, como
-  `cartoons.scholio.review`. Vacío o sin definir = sin contraseña.
+- `ADMIN_PASSWORD`: si la defines, la app pide esta contraseña antes de dejar entrar. La sesión
+  dura 30 días desde la última visita (cada uso la renueva), y cambiar la contraseña cierra todas
+  las sesiones abiertas. Tras 5 intentos fallidos en 15 minutos, el login se bloquea hasta que
+  pasen esos 15 minutos. Recomendado si el dominio es accesible desde internet, como
+  `cartoons.scholio.review`; usa una larga y aleatoria (`openssl rand -base64 24`). Vacío o sin
+  definir = sin contraseña.
+- `ADDRESS_HEADER` / `XFF_DEPTH`: de dónde saca el servidor la IP del cliente
+  ([svelte-adapter-bun](https://github.com/gornostay25/svelte-adapter-bun#address_header-and-xff_depth)).
+  El límite de intentos va por IP; sin esto, detrás de Traefik todas las peticiones parecen venir
+  de la misma IP y el límite pasa a ser global (un atacante te bloquearía el login a ti también,
+  aunque no las sesiones que ya tengas abiertas). Detrás de Traefik solo:
+  `ADDRESS_HEADER=X-Forwarded-For`, `XFF_DEPTH=1`; si además pasa por el proxy de Cloudflare,
+  `ADDRESS_HEADER=CF-Connecting-IP`.
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`: para el botón «🎤 Pídemelo». Graba lo que dices
   («hazme una lista con Chicho Terremoto, David el Gnomo y el Conde Pátula»), OpenAI lo
   transcribe y Claude elige las carpetas que encajan; el resultado sale en «Para ver hoy» como
@@ -126,7 +136,7 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
 En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
 `ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las
 variables de entorno `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN`, `CF_ACCESS_CLIENT_ID`,
-`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
+`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `ADDRESS_HEADER` (y `XFF_DEPTH` si aplica), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
 asignes). No hace falta publicar/exponer el puerto al host:
 Traefik llega al contenedor por la red interna que gestiona Dokploy — `compose.yaml` no
 interviene en este flujo, es solo para desarrollo local.
