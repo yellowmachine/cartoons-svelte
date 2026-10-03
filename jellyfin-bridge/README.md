@@ -86,15 +86,15 @@ curl "${AUTH[@]}" -X POST $B/sessions/<id>/play -d '{"item_ids": ["<id>"]}'
 
 ## Deployment at home
 
-`docker-compose.home.yml` at the repo root runs this bridge, with no
-published ports, plus `cloudflared` and Watchtower. Put these in `.env`, next to that file:
+`docker-compose.home.yml` at the repo root runs this bridge, published on port
+8787 of the LAN, plus Watchtower. The Cloudflare tunnel runs separately and
+points at it. Put these in `.env`, next to that file:
 
 ```env
 JELLYFIN_URL=http://host.docker.internal:8096
 JELLYFIN_USER_ID=<user id>
 JELLYFIN_API_KEY=<API key>
 BRIDGE_API_TOKEN=<openssl rand -hex 32>
-CLOUDFLARE_TUNNEL_TOKEN=<tunnel token>
 BRIDGE_UPDATE_TOKEN=<openssl rand -hex 32>
 WATCHTOWER_TOKEN=<openssl rand -hex 32>
 ```
@@ -104,10 +104,9 @@ Jellyfin runs in Docker, put both on the same network and use its service name.
 
 ### Cloudflare setup
 
-1. **Tunnel.** Go to Zero Trust → Networks → Tunnels and create a tunnel of type
-   _Cloudflared_. Copy its token into `CLOUDFLARE_TUNNEL_TOKEN`. Add a
+1. **Tunnel.** In your existing tunnel (Zero Trust → Networks → Tunnels), add a
    _public hostname_, for example `jellyfin-bridge.example.com`, with service
-   `http://jellyfin-bridge:8787`.
+   `http://<bridge host LAN IP>:8787`.
 2. **Service token.** Go to Zero Trust → Access → Service Auth → Service Tokens
    and create one. Keep its Client ID and Secret for the app on the VPS.
 3. **Access application.** Go to Zero Trust → Access → Applications and add a
@@ -116,9 +115,11 @@ Jellyfin runs in Docker, put both on the same network and use its service name.
    Browsers get blocked, and only requests that carry
    `CF-Access-Client-Id` / `CF-Access-Client-Secret` get through.
 
-If you already have a tunnel at home (for example the one for `mpd-bridge`),
-you can add this hostname to it instead of running a second `cloudflared`, and
-reuse the same service token by adding it to this application's policy.
+You can reuse an existing service token (for example the one for `mpd-bridge`)
+by adding it to this application's policy.
+
+Port 8787 is reachable from the whole LAN without going through Access, so
+only the bridge's tokens protect it there.
 
 On the VPS, the app needs `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN` (the
 bridge's `API_TOKEN`) and the two `CF_ACCESS_*` values.
