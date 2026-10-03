@@ -58,11 +58,23 @@ Variables de la app:
   definir = sin contraseña.
 - `ADDRESS_HEADER` / `XFF_DEPTH`: de dónde saca el servidor la IP del cliente
   ([svelte-adapter-bun](https://github.com/gornostay25/svelte-adapter-bun#address_header-and-xff_depth)).
-  El límite de intentos va por IP; sin esto, detrás de Traefik todas las peticiones parecen venir
-  de la misma IP y el límite pasa a ser global (un atacante te bloquearía el login a ti también,
-  aunque no las sesiones que ya tengas abiertas). Detrás de Traefik solo:
-  `ADDRESS_HEADER=X-Forwarded-For`, `XFF_DEPTH=1`; si además pasa por el proxy de Cloudflare,
-  `ADDRESS_HEADER=CF-Connecting-IP`.
+  El límite de intentos va por IP; sin esto, todas las peticiones parecen venir del proxy y el
+  límite pasa a ser global (un atacante te bloquearía el login a ti también, aunque no las
+  sesiones que ya tengas abiertas). El valor depende de cómo llegue el tráfico:
+
+  | Cómo llega el tráfico                                 | `ADDRESS_HEADER`   | `XFF_DEPTH` |
+  | ----------------------------------------------------- | ------------------ | ----------- |
+  | Registro DNS en Cloudflare con nube gris → Traefik    | `X-Forwarded-For`  | `1`         |
+  | Túnel de Cloudflare → app                             | `CF-Connecting-IP` | —           |
+  | Registro DNS en Cloudflare con nube naranja → Traefik | `CF-Connecting-IP` | —           |
+
+  Con nube gris, Traefik añade al final de `X-Forwarded-For` la IP real de quien le conecta y la
+  app lee esa última entrada, así que no se puede falsificar. `CF-Connecting-IP` solo es fiable si
+  nadie puede llegar a la app sin pasar por Cloudflare: con un túnel ya es así, pero con nube
+  naranja hay que limitar los puertos 80/443 del VPS a las [IPs de
+  Cloudflare](https://www.cloudflare.com/ips/), o cualquiera que le hable directo al VPS se
+  inventa la cabecera y se salta el límite. En producción usamos nube gris.
+
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`: para el botón «🎤 Pídemelo». Graba lo que dices
   («hazme una lista con Chicho Terremoto, David el Gnomo y el Conde Pátula»), OpenAI lo
   transcribe y Claude elige las carpetas que encajan; el resultado sale en «Para ver hoy» como
@@ -136,7 +148,7 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
 En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
 `ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las
 variables de entorno `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN`, `CF_ACCESS_CLIENT_ID`,
-`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `ADDRESS_HEADER` (y `XFF_DEPTH` si aplica), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
+`CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `ADDRESS_HEADER=X-Forwarded-For`, `XFF_DEPTH=1`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
 asignes). No hace falta publicar/exponer el puerto al host:
 Traefik llega al contenedor por la red interna que gestiona Dokploy — `compose.yaml` no
 interviene en este flujo, es solo para desarrollo local.
