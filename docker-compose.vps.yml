@@ -1,0 +1,43 @@
+# App en el VPS, desplegada en Dokploy como Compose. Usa la imagen que publica
+# build-deploy.yml; el bridge sigue en casa (docker-compose.home.yml) y se le
+# llega por el túnel de Cloudflare.
+#
+# Las variables se definen en Dokploy (pestaña Environment), que las escribe en
+# un .env junto a este fichero:
+#   ORIGIN=https://cartoons.scholio.review
+#   JELLYFIN_BRIDGE_URL=<hostname del túnel del bridge, sin barra final>
+#   JELLYFIN_BRIDGE_TOKEN=<mismo valor que BRIDGE_API_TOKEN en casa>
+#   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET=<service token de Access>
+#   ADMIN_PASSWORD=<contraseña de entrada>
+#   OPENAI_API_KEY / ANTHROPIC_API_KEY=<para el asistente por voz>
+#
+# El dominio se añade en la pestaña Domains de Dokploy (servicio `cartoons`,
+# puerto 3000): Dokploy pone las etiquetas de Traefik y la red, así que aquí no
+# se publican puertos.
+
+services:
+  cartoons:
+    image: ghcr.io/yellowmachine/cartoons-svelte:latest
+    # Para volver a una versión anterior: :sha-<commit completo>.
+    pull_policy: always
+    environment:
+      ORIGIN: ${ORIGIN:?set ORIGIN in .env}
+      JELLYFIN_BRIDGE_URL: ${JELLYFIN_BRIDGE_URL:?set JELLYFIN_BRIDGE_URL in .env}
+      JELLYFIN_BRIDGE_TOKEN: ${JELLYFIN_BRIDGE_TOKEN:?set JELLYFIN_BRIDGE_TOKEN in .env}
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # DNS con nube gris → Traefik, que añade la IP real al final de
+      # X-Forwarded-For (ver README).
+      ADDRESS_HEADER: X-Forwarded-For
+      XFF_DEPTH: '1'
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    expose:
+      - '3000'
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']

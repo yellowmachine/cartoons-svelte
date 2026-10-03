@@ -145,10 +145,14 @@ Secreto necesario en el repo de GitHub (Settings → Secrets and variables → A
   `CF_ACCESS_CLIENT_SECRET`: para el aviso de actualización al bridge. Sin los dos primeros, ese
   paso se salta.
 
-En Dokploy la app se configura como **Application** (no como Compose) apuntando a la imagen
+En Dokploy la app se configura como **Application** apuntando a la imagen
 `ghcr.io/<owner>/<repo>:latest` con `pull_policy: always`, puerto interno **3000**, y las
 variables de entorno `JELLYFIN_BRIDGE_URL`, `JELLYFIN_BRIDGE_TOKEN`, `CF_ACCESS_CLIENT_ID`,
 `CF_ACCESS_CLIENT_SECRET`, `ADMIN_PASSWORD`, `ADDRESS_HEADER=X-Forwarded-For`, `XFF_DEPTH=1`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` y `ORIGIN` (esta última con el dominio público que le
 asignes). No hace falta publicar/exponer el puerto al host:
 Traefik llega al contenedor por la red interna que gestiona Dokploy — `compose.yaml` no
 interviene en este flujo, es solo para desarrollo local.
+
+Como alternativa, `docker-compose.vps.yml` despliega la misma imagen como **Compose** en Dokploy:
+las variables van en la pestaña Environment y el dominio (servicio `cartoons`, puerto 3000) en
+Domains. Ya fija `ADDRESS_HEADER=X-Forwarded-For` y `XFF_DEPTH=1`.
