@@ -31,8 +31,9 @@ services:
     ports:
       - '8787:8787'
     labels:
-      # Watchtower solo actualiza los contenedores con esta etiqueta.
+      # Watchtower solo actualiza los contenedores con esta etiqueta, en su scope.
       - com.centurylinklabs.watchtower.enable=true
+      - com.centurylinklabs.watchtower.scope=cartoons
     # Si Jellyfin corre en el host (no en este compose).
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -54,6 +55,12 @@ services:
       WATCHTOWER_POLL_INTERVAL: '86400'
       WATCHTOWER_LABEL_ENABLE: 'true'
       WATCHTOWER_CLEANUP: 'true'
+      # En la misma máquina corre el Watchtower del stack de mpd. Sin scope,
+      # cada instancia para a las demás al arrancar y actualiza también los
+      # contenedores etiquetados de los otros stacks.
+      WATCHTOWER_SCOPE: cartoons
+    labels:
+      - com.centurylinklabs.watchtower.scope=cartoons
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
